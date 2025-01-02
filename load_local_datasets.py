@@ -1,5 +1,5 @@
 """
-Script to load/update the AST local regional datasets into a database (duckdb)
+Script to load AST local datasets into a database (duckdb)
 """
 
 import warnings
@@ -74,7 +74,10 @@ def format_geom_col(gdf):
 
 
 def add_data_to_duckdb(conn, gdf, schema, table):
-    
+    """
+    Creates a spatial table in Duckdb based on a gdf.
+    If table exists and structure is unchanged (columns and rows), the table creation is skipped.
+    """
     conn.execute(f"SET search_path TO {schema};")
     
     dck_tab_list = conn.execute(
@@ -93,7 +96,7 @@ def add_data_to_duckdb(conn, gdf, schema, table):
 
         if (dck_row_count != len(gdf)) or (set(list(gdf.columns)) != set(dck_col_nams)):
             print(f'....import to Duckdb ({gdf.shape[0]} rows)')
-            chunk_size = 10000
+            chunk_size = 100000
             total_chunks = (len(gdf) + chunk_size - 1) // chunk_size
             
             # Process the initial chunk and create the table
@@ -130,7 +133,7 @@ def add_data_to_duckdb(conn, gdf, schema, table):
 
     else:
         print(f'....import to Duckdb ({gdf.shape[0]} rows)')
-        chunk_size = 10000
+        chunk_size = 100000
         total_chunks = (len(gdf) + chunk_size - 1) // chunk_size
         
         # Process the initial chunk and create the table
@@ -165,7 +168,9 @@ def add_data_to_duckdb(conn, gdf, schema, table):
    
     
 def load_datasets(in_files, conn):
-    
+    """
+    Loads datasets from the regional AST spreadsheets to a Duckdb database
+    """
     total = len(in_files)
     count_reg= 1
     
@@ -211,9 +216,6 @@ def load_datasets(in_files, conn):
 
 
 
-
-
-
 if __name__ == "__main__":
     start_t = timeit.default_timer()
     
@@ -223,20 +225,20 @@ if __name__ == "__main__":
     Duckdb= DuckDBConnector(db= projDB)
     Duckdb.connect_to_db()
     conn= Duckdb.conn 
-    conn.execute("SET GLOBAL pandas_analyze_sample=1000000")
+    conn.execute("SET GLOBAL pandas_analyze_sample=500_000")
 
 
     # input AST spreadsheets
     in_loc = r'P:\corp\script_whse\python\Utility_Misc\Ready\statusing_tools_arcpro\statusing_input_spreadsheets'
     in_files= {
-        'RWC': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
-        'RSC': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
-        'RTO': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
-        'RKB': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
-        'RCB': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
+        #'RWC': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
+        #'RSC': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
+        #'RTO': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
+        #'RKB': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
+        #'RCB': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
         'RSK': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
-        'ROM': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
-        'RNO': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')   
+        #'ROM': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
+        #'RNO': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')   
     }
     
     try:
