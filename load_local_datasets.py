@@ -39,8 +39,7 @@ def create_db_schemas (conn, schema_list):
     for schema in schema_list:
         conn.execute(f'CREATE SCHEMA IF NOT EXISTS {schema};')
     
-    
-    
+      
     
 def esri_to_gdf(file_path):
     """Returns a Geopandas file (gdf) from
@@ -60,7 +59,6 @@ def esri_to_gdf(file_path):
     return gdf
 
 
-
 def format_geom_col(gdf):
     """
     Transform the geometry column of a geodataframe to WKT
@@ -72,7 +70,6 @@ def format_geom_col(gdf):
     gdf = gdf.drop(columns=['geometry'])
     
     return gdf
-
 
 
 
@@ -173,7 +170,7 @@ def load_datasets(in_files, conn):
     count_reg= 1
     
     for k, v in in_files.items():
-        print (f'\nLoading data for region {count_reg} of {total}: {k}')
+        print (f'\n\nLoading data for region {count_reg} of {total}: {k}')
         
         schema= k.lower()
         
@@ -204,7 +201,10 @@ def load_datasets(in_files, conn):
                 print("datasource is Invalid. Skipping!")
             
             # Load the data
-            add_data_to_duckdb(conn, gdf, schema, table_name)
+            if len(gdf) > 0:
+                add_data_to_duckdb(conn, gdf, schema, table_name)
+            else:
+                print ('....No data to add.')
         
         count_reg += 1
     
@@ -231,12 +231,12 @@ if __name__ == "__main__":
     in_files= {
         'RWC': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
         'RSC': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
-        #'RTO': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
-        #'RKB': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
-        #'RCB': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
-        #'RSK': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
-        #'ROM': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
-        #'RNO': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')   
+        'RTO': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
+        'RKB': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
+        'RCB': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
+        'RSK': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
+        'ROM': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
+        'RNO': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')   
     }
     
     try:
