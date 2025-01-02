@@ -84,7 +84,6 @@ def create_inventory(input_file):
 
         # Append metadata to the output list
         inventory.append({
-            "Category": row['Category'],
             "Dataset": row['Dataset'],
             **metadata
         })
@@ -120,7 +119,7 @@ def generate_report (workspace, df_list, sheet_list,filename):
             'total_row': True,
             'columns': col_names})
 
-    writer.save()
+    writer.close()
     
     
 if __name__ == "__main__":
@@ -146,7 +145,8 @@ if __name__ == "__main__":
     for k, v in in_files.items():
         print (f'\nCreating inventory {count} of {total}: {k}')
         df_inv = create_inventory(v)
-        invs[k]= df_inv
+        if df_inv.shape[0] > 0:
+            invs[k]= df_inv
         count += 1
 
     # Save the inventory spreadsheet
