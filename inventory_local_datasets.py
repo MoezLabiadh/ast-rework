@@ -151,7 +151,7 @@ if __name__ == "__main__":
 
     # Save the inventory spreadsheet
     out_loc= r'W:\lwbc\visr\Workarea\moez_labiadh\STATUSING\ast_rework\local_datasets\inventory'
-    date= datetime.now().strftime("%Y%m%d_%H%M")
+    date= datetime.now().strftime("%Y%m%d")
     out_file= f'{date}_inventory_local_datasets'
     generate_report (
         out_loc, 
