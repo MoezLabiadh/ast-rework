@@ -10,7 +10,7 @@ import timeit
 import duckdb
 import pandas as pd
 import geopandas as gpd
-from shapely import wkb, wkt
+from shapely import wkt
 
 
 class DuckDBConnector:
@@ -64,6 +64,11 @@ def format_geom_col(gdf):
     Transform the geometry column of a geodataframe to WKT
     
     """
+    gdf = gdf[gdf['geometry'].notnull()] #remove missing geometries
+    
+    # remove invalid geometries
+    #gdf = gdf[gdf['geometry'].apply(lambda geom: geom.is_valid if geom else False)]
+
     gdf['GEOMETRY']= gdf['geometry'].apply(lambda x: wkt.dumps(x, output_dimension=2))
     gdf['GEOMETRY'] = gdf['GEOMETRY'].astype(str)
     
@@ -196,20 +201,24 @@ def load_datasets(in_files, conn):
             if pd.isna(datasource) or datasource.startswith("WHSE") or datasource.startswith("REG"):
                 continue
     
-            # Read the data
+            
             try:
+                # Read the data
                 gdf = esri_to_gdf(datasource)
-                gdf = format_geom_col(gdf)
-                table_name = dataset.lower().replace(" ", "_")
+                
+                # Load the data
+                if len(gdf) > 0:
+                    gdf = format_geom_col(gdf)
+                    table_name = dataset.lower().replace(" ", "_")
+                    add_data_to_duckdb(conn, gdf, schema, table_name)
+                else:
+                    print ('....No data to add.')
+                
             
             except:
                 print("datasource is Invalid. Skipping!")
             
-            # Load the data
-            if len(gdf) > 0:
-                add_data_to_duckdb(conn, gdf, schema, table_name)
-            else:
-                print ('....No data to add.')
+
         
         count_reg += 1
     
@@ -221,8 +230,8 @@ if __name__ == "__main__":
     
     wks= r'W:\lwbc\visr\Workarea\moez_labiadh\STATUSING\ast_rework\local_datasets\database'
     print ('Connecting to Duckdb') 
-    projDB= os.path.join(wks,  'ast_local_datasets.db')
-    Duckdb= DuckDBConnector(db= projDB)
+    DB= os.path.join(wks,  'ast_local_datasets.db')
+    Duckdb= DuckDBConnector(db= DB)
     Duckdb.connect_to_db()
     conn= Duckdb.conn 
     conn.execute("SET GLOBAL pandas_analyze_sample=500_000")
@@ -236,8 +245,8 @@ if __name__ == "__main__":
         #'RTO': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
         #'RKB': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
         #'RCB': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
-        'RSK': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
-        #'ROM': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
+        #'RSK': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
+        'ROM': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
         #'RNO': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')   
     }
     
