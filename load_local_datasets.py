@@ -240,14 +240,14 @@ if __name__ == "__main__":
     # input AST spreadsheets
     in_loc = r'P:\corp\script_whse\python\Utility_Misc\Ready\statusing_tools_arcpro\statusing_input_spreadsheets'
     in_files= {
-        #'RWC': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
-        #'RSC': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
-        #'RTO': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
-        #'RKB': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
-        #'RCB': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
-        #'RSK': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
+        'RWC': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
+        'RSC': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
+        'RTO': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
+        'RKB': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
+        'RCB': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
+        'RSK': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
         'ROM': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
-        #'RNO': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')   
+        'RNO': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')   
     }
     
     try:
