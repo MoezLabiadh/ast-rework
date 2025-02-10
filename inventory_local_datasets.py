@@ -100,7 +100,7 @@ def create_inventory(input_file):
 def generate_report(workspace, df_list, sheet_list, filename):
     """ Exports dataframes to multi-tab excel spreadsheet"""
     file_name = os.path.join(workspace, filename + '.xlsx')
-
+    import xlsxwriter
     writer = pd.ExcelWriter(file_name, engine='xlsxwriter')
 
     for dataframe, sheet in zip(df_list, sheet_list):
