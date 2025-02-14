@@ -2,26 +2,24 @@ import folium
 from folium import MacroElement
 from jinja2 import Template
 
-# Define a custom MacroElement to inject JavaScript code
+# Define a custom MacroElement to inject your JS code
 class ESRIVectorTile(MacroElement):
     def __init__(self):
         super().__init__()
-        # The template uses the parent FeatureGroup's name as the layer container.
         self._template = Template(u"""
             {% macro script(this, kwargs) %}
-            // Create the Mapbox GL layer for the ESRI vector tile
+            // Configure Mapbox GL layer with error handling
             var glLayer = L.mapboxGL({
                 style: 'https://www.arcgis.com/sharing/rest/content/items/b1624fea73bd46c681fab55be53d96ae/resources/styles/root.json',
                 accessToken: 'no-token-needed'
-            });
-            // Add the glLayer to its parent (the FeatureGroup)
-            glLayer.addTo({{ this._parent.get_name() }});
+            }).addTo({{ this._parent.get_name() }});
             
             // Add error listeners
             glLayer.getGLMap().on('load', function() {
                 console.log('Mapbox GL map loaded');
                 debugLabelLayers();
             });
+            
             glLayer.getGLMap().on('error', function(e) {
                 console.error('Mapbox GL error:', e.error);
             });
@@ -30,16 +28,19 @@ class ESRIVectorTile(MacroElement):
             function debugLabelLayers() {
                 var mapGL = glLayer.getGLMap();
                 console.log('All layers:', mapGL.getStyle().layers);
+                
+                // Check for label layers
                 var labelLayers = mapGL.getStyle().layers.filter(function(l) {
                     return l.type === 'symbol' && l.layout && l.layout['text-field'];
                 });
+                
                 console.log('Label layers found:', labelLayers);
                 if (labelLayers.length === 0) {
                     console.warn('No label layers found in style');
                 }
             }
             
-            // Optional: Add a layer inspection control to the main map
+            // Optional: Add layer inspection control
             L.Control.LayerInspector = L.Control.extend({
                 onAdd: function(map) {
                     var div = L.DomUtil.create('div', 'leaflet-control-layer-inspector');
@@ -48,14 +49,14 @@ class ESRIVectorTile(MacroElement):
                     return div;
                 }
             });
-            new L.Control.LayerInspector({ position: 'topright' }).addTo({{ this._parent.get_root().get_name() }});
+            new L.Control.LayerInspector({ position: 'topright' }).addTo({{ this._parent.get_name() }});
             {% endmacro %}
         """)
 
-# Create the Folium map without a default tile layer (we'll use our custom vector tile)
+# Create the Folium map with no default tiles (we'll add our vector tile layer)
 m = folium.Map(location=[49.2827, -123.1207], zoom_start=12, tiles=None)
 
-# Add custom CSS to ensure the map fills the page and to set z-index for the Mapbox GL canvas
+# (Optional) Add custom CSS to ensure the map container fills the page
 css = """
 <style>
   html, body, #map {
@@ -70,23 +71,27 @@ css = """
 """
 m.get_root().header.add_child(folium.Element(css))
 
-# Include external JS/CSS dependencies for Mapbox GL and the leaflet-mapbox-gl plugin
-dependencies = [
+# Add the Mapbox GL JS and leaflet-mapbox-gl dependencies
+js_css = [
     '<link href="https://api.mapbox.com/mapbox-gl-js/v2.9.2/mapbox-gl.css" rel="stylesheet">',
     '<script src="https://api.mapbox.com/mapbox-gl-js/v2.9.2/mapbox-gl.js"></script>',
     '<script src="https://unpkg.com/mapbox-gl-leaflet/leaflet-mapbox-gl.js"></script>'
 ]
-for dep in dependencies:
-    m.get_root().html.add_child(folium.Element(dep))
+for item in js_css:
+    m.get_root().html.add_child(folium.Element(item))
 
-# Create a FeatureGroup for the ESRI vector tile layer so it appears in the layer control
-vector_tile_fg = folium.FeatureGroup(name="ESRI Vector Tile")
-vector_tile_fg.add_child(ESRIVectorTile())
-m.add_child(vector_tile_fg)
+# Inject our custom JS code (the ESRI vector tile layer and error/debug functions)
+m.add_child(ESRIVectorTile())
 
-# Add a LayerControl to toggle overlays (and any base layers if added)
-folium.LayerControl(collapsed=False).add_to(m)
+# Add attribution as a fixed overlay in the bottom right corner
+attribution_html = """
+<div style="position: absolute; bottom: 10px; right: 10px; z-index: 9999;
+            background: rgba(255, 255, 255, 0.8); padding: 5px; font-size: 10px;">
+Tiles © <a target='_blank' href='https://catalogue.data.gov.bc.ca/dataset/78895ec6-c679-4837-a01a-8d65876a3da9'>
+ESRI &amp; GeoBC</a>
+</div>
+"""
+m.get_root().html.add_child(folium.Element(attribution_html))
 
-# Save the final map to an HTML file
+# Save the map to an HTML file
 m.save("BCbasemap_vector_tile.html")
-m
