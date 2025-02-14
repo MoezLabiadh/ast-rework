@@ -22,6 +22,11 @@
       // Initialize map
       var map = L.map('map').setView([49.2827, -123.1207], 12);
 
+      // Add the attribution for the tile source
+      map.attributionControl.addAttribution(
+        "Tiles © <a target='_blank' href='https://catalogue.data.gov.bc.ca/dataset/78895ec6-c679-4837-a01a-8d65876a3da9'>ESRI &amp; GeoBC</a>"
+      );
+
       // Configure Mapbox GL layer with error handling
       var glLayer = L.mapboxGL({
         style: 'https://www.arcgis.com/sharing/rest/content/items/b1624fea73bd46c681fab55be53d96ae/resources/styles/root.json',
