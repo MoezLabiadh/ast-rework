@@ -34,7 +34,7 @@ import cx_Oracle
 import pandas as pd
 import folium
 import geopandas as gpd
-from shapely import wkt, wkb
+from shapely import from_wkt, wkb
 #from datetime import datetime
 
 
@@ -63,35 +63,59 @@ def read_query(connection,cursor,query,bvars):
   
            
 
-def esri_to_gdf (aoi):
-    """Returns a Geopandas file (gdf) based on 
-       an ESRI format vector (shp or featureclass/gdb)"""
+def df_2_gdf(df, crs):
+    """ Return a geopandas gdf based on a df with Geometry column"""
+    df['SHAPE'] = df['SHAPE'].astype(str)
     
-    if '.shp' in aoi: 
-        gdf = gpd.read_file(aoi)
+    df['geometry'] = df['SHAPE'].apply(lambda x: from_wkt(x))
     
-    elif '.gdb' in aoi:
-        l = aoi.split ('.gdb')
-        gdb = l[0] + '.gdb'
-        fc = os.path.basename(aoi)
-        gdf = gpd.read_file(filename= gdb, layer= fc)
-        
-    else:
-        raise Exception ('Format not recognized. Please provide a shp or featureclass (gdb)!')
+    gdf = gpd.GeoDataFrame(df, geometry='geometry', crs=f"EPSG:{crs}")
+    gdf = gdf.drop(columns=['SHAPE'])
     
     return gdf
 
 
 
-def df_2_gdf (df, crs):
-    """ Return a geopandas gdf based on a df with Geometry column"""
+def df_2_gdf(df, crs):
+    """ Return a geopandas gdf based on a df with Geometry column, handling curve geometries"""
+    df = df.copy()
     df['SHAPE'] = df['SHAPE'].astype(str)
-    df['geometry'] = gpd.GeoSeries.from_wkt(df['SHAPE'])
-    gdf = gpd.GeoDataFrame(df, geometry='geometry')
-    #df['geometry'] = df['SHAPE'].apply(wkt.loads)
-    #gdf = gpd.GeoDataFrame(df, geometry = df['geometry'])
-    gdf.crs = "EPSG:" + str(crs)
-    del df['SHAPE']
+    
+    def linearize_geometry(wkt_str):
+        """Convert curve geometries to linear approximations"""
+        from osgeo import ogr
+        try:
+            # Create OGR geometry from WKT
+            geom = ogr.CreateGeometryFromWkt(wkt_str)
+            if geom is None:
+                return None
+            
+            # GetLinearGeometry() converts curves to linear approximations
+            linear_geom = geom.GetLinearGeometry()
+            
+            # Return as WKT that standard tools can handle
+            return linear_geom.ExportToWkt()
+        except Exception as e:
+            print(f"Error processing geometry: {e}")
+            return None
+    
+    def process_geometry(wkt_str):
+        """Only linearize if it contains curve geometry types"""
+        if any(curve_type in wkt_str.upper() for curve_type in ['CURVE', 'CIRCULARSTRING', 'COMPOUNDCURVE']):
+            return linearize_geometry(wkt_str)
+        return wkt_str
+    
+    # Only process geometries that need linearization
+    df['processed_wkt'] = df['SHAPE'].apply(process_geometry)
+    
+    # Create geometries from the processed WKT
+    df['geometry'] = gpd.GeoSeries.from_wkt(df['processed_wkt'])
+    
+    # Create GeoDataFrame
+    gdf = gpd.GeoDataFrame(df, geometry='geometry', crs=f"EPSG:{crs}")
+    
+    # Clean up temporary columns
+    gdf = gdf.drop(columns=['SHAPE', 'processed_wkt'])
     
     return gdf
 
