@@ -115,7 +115,7 @@ def get_wkb_srid (gdf):
     
     geom = gdf['geometry'].iloc[0]
 
-    wkb_aoi = geom.to_wkb()
+    wkb_aoi = wkb.dumps(geom)
     
     # if geometry has Z values, flatten geometry
     if geom.has_z:
@@ -394,19 +394,20 @@ def write_xlsx (results,df_stat,workspace):
     col_names = [{'header': col_name} for col_name in df_res.columns]
     worksheet.add_table(0, 0, df_res.shape[0]+1, df_res.shape[1]-1,{'columns': col_names})
     
-    writer.save()
+    #writer.save()
     writer.close()
 
 
     
-def execute_status ():
+if __name__ == "__main__":
     """Executes the AST light process """
     start_t = timeit.default_timer() #start time
     
-    #user inputs
-    workspace = r"\\spatialfiles.bcgov\Work\lwbc\visr\Workarea\moez_labiadh\TOOLS\SCRIPTS\STATUSING\results_demo"
-    aoi = r'\\spatialfiles.bcgov\Work\lwbc\visr\Workarea\moez_labiadh\TOOLS\SCRIPTS\STATUSING\test_data\aoi_test.shp'
-    input_src = 'AOI' # Possible values are "TANTALIS" and AOI
+    #paths
+    workspace = r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework"
+    wksp_xls = os.path.join(workspace, 'input_spreadsheets')
+    aoi = os.path.join(workspace, 'test_data', 'aoi_test_2.shp')
+    out_wksp = os.path.join(workspace, 'outputs')
     
     
     print ('Connecting to BCGW.')
@@ -422,7 +423,7 @@ def execute_status ():
     
     
     print ('\nReading User inputs: AOI.')
-    
+    input_src = 'AOI' # Possible values are "TANTALIS" and AOI
     if input_src == 'AOI':
         print('....Reading the AOI file')
         gdf_aoi = esri_to_gdf (aoi)
@@ -457,7 +458,6 @@ def execute_status ():
         raise Exception('Possible input sources are TANTALIS and AOI!')
     
     print ('\nReading the AST datasets spreadsheet.')
-    wksp_xls = r'\\GISWHSE.ENV.GOV.BC.CA\whse_np\corp\script_whse\python\Utility_Misc\Ready\statusing_tools_arcpro\statusing_input_spreadsheets'
     region = 'west_coast' #**************USER INPUT: REGION*************
     print ('....Region is {}'.format (region))
     df_stat = read_input_spreadsheets (wksp_xls,region)
@@ -568,7 +568,6 @@ def execute_status ():
         # add the dataframe to the resuls dictionnary
         results[item] =  df_all_res
     
-    
         if ov_nbr > 0:
             print ('.....generating a map.')
             gdf_intr = df_2_gdf (df_all, 3005)
@@ -585,21 +584,17 @@ def execute_status ():
             
             gdf_intr[col_lbl] = gdf_intr[col_lbl].astype(str) 
             
-            make_status_map (gdf_aoi, gdf_intr, col_lbl, item, workspace)
+            make_status_map (gdf_aoi, gdf_intr, col_lbl, item, out_wksp)
     
+ 
         
         counter += 1
     
     print ('\nWriting Results to spreadsheet')
-    write_xlsx (results,df_stat,workspace)
+    write_xlsx (results,df_stat,out_wksp)
     
     finish_t = timeit.default_timer() #finish time
     t_sec = round(finish_t-start_t)
     mins = int (t_sec/60)
     secs = int (t_sec%60)
     print ('\nProcessing Completed in {} minutes and {} seconds'.format (mins,secs))
-        
-    return results
-              
-
-results = execute_status()
