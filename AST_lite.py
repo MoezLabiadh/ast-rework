@@ -264,6 +264,32 @@ def get_radius (item_index, df_stat):
     return radius
 
 
+def apply_rectify_fix(query, table_name, geom_col):
+    """
+    Apply SDO_UTIL.RECTIFY_GEOMETRY fix for specific problematic tables
+    with Arc/Curve geometries
+    """
+    # List of tables that need RECTIFY_GEOMETRY fix
+    PROBLEMATIC_TABLES = [
+        'WHSE_CADASTRE.PMBC_PARCEL_FABRIC_POLY_FA_SVW'
+    ]
+    
+    # Only apply fix to problematic tables
+    if table_name not in PROBLEMATIC_TABLES:
+        return query
+    
+    print('.......applying RECTIFY_GEOMETRY fix to SDO_DISTANCE for problematic table')
+    
+    # Wrap geometry in SDO_GEOM.SDO_DISTANCE calls
+    # This handles both TANTALIS queries (b.geom_col, a.SHAPE) 
+    # and AOI/WKB queries (b.geom_col, SDO_GEOMETRY)
+    query = query.replace(
+        f'SDO_GEOM.SDO_DISTANCE(b.{geom_col},',
+        f'SDO_GEOM.SDO_DISTANCE(SDO_UTIL.RECTIFY_GEOMETRY(b.{geom_col}, 0.05),'
+    )
+    
+    return query
+
 
 def load_queries ():
     sql = {}
@@ -316,7 +342,7 @@ def load_queries ():
                         {def_query}  
                     """ 
 
-         #  Query for tables with SRID mismatch - transforms AOI to match table SRID
+    #  Query for tables with SRID mismatch - transforms AOI to match table SRID
     sql ['overlay_srid_mismatch'] = """
                     SELECT {cols},
                     
@@ -473,7 +499,7 @@ if __name__ == "__main__":
     #paths
     workspace = r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework"
     wksp_xls = os.path.join(workspace, 'input_spreadsheets')
-    aoi = os.path.join(workspace, 'test_data', 'aoi_test_2.shp')
+    aoi = os.path.join(workspace, 'test_data', 'aoi_test_1.shp')
     out_wksp = os.path.join(workspace, 'outputs')
     
     
@@ -491,6 +517,7 @@ if __name__ == "__main__":
     
     print ('\nReading User inputs: AOI.')
     input_src = 'AOI' # Possible values are "TANTALIS" and AOI
+
     if input_src == 'AOI':
         print('....Reading the AOI file')
         gdf_aoi = esri_to_gdf (aoi)
@@ -594,13 +621,16 @@ if __name__ == "__main__":
                 bvars_intr = {'file_nbr':in_fileNbr,
                               'disp_id':in_dispID,'parcel_id': in_prclID}
             else:
-                # WKB method doesn't need special handling
+                # WKB method (AOI input)
                 query = sql ['overlay_wkb'].format(
                     cols=cols, tab=table, radius=radius,
                     geom_col=geom_col, def_query=def_query)
                 cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
                 bvars_intr = {'wkb_aoi':wkb_aoi,'srid':srid,'srid_t':str(srid_t)}
-                
+            
+            # Apply RECTIFY fix for problematic tables (works for both TANTALIS and AOI)
+            query = apply_rectify_fix(query, table, geom_col)
+            
             df_all= read_query(connection,cursor,query,bvars_intr) 
             
                 
@@ -701,6 +731,5 @@ if __name__ == "__main__":
             - AOI 1 -big:
             - AOI 2 -medium: 4m27s(h), 2m20s(o)
             - TANTALIS -big: 
-            - TANTALIS -medium: 
+            - TANTALIS -medium: 5m30s(h)
     '''
-    
