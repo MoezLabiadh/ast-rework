@@ -30,7 +30,7 @@ warnings.simplefilter(action='ignore')
 import os
 import re
 import timeit
-import cx_Oracle
+import oracledb
 import pandas as pd
 import folium
 import geopandas as gpd
@@ -39,10 +39,10 @@ from shapely import from_wkt, wkb
 
 
 
-def connect_to_DB (username,password,hostname):
+def connect_to_Oracle(username,password,hostname):
     """ Returns a connection and cursor to Oracle database"""
     try:
-        connection = cx_Oracle.connect(username, password, hostname, encoding="UTF-8")
+        connection = oracledb.connect(user=username, password=password, dsn=hostname)
         cursor = connection.cursor()
         print  ("....Successffuly connected to the database")
     except:
@@ -61,6 +61,24 @@ def read_query(connection,cursor,query,bvars):
     
     return df    
   
+
+def esri_to_gdf (aoi):
+    """Returns a Geopandas file (gdf) based on 
+       an ESRI format vector (shp or featureclass/gdb)"""
+    
+    if '.shp' in aoi: 
+        gdf = gpd.read_file(aoi)
+    
+    elif '.gdb' in aoi:
+        l = aoi.split ('.gdb')
+        gdb = l[0] + '.gdb'
+        fc = os.path.basename(aoi)
+        gdf = gpd.read_file(filename= gdb, layer= fc)
+        
+    else:
+        raise Exception ('Format not recognized. Please provide a shp or featureclass (gdb)!')
+    
+    return gdf
            
 
 def df_2_gdf(df, crs):
@@ -430,7 +448,7 @@ if __name__ == "__main__":
     #paths
     workspace = r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework"
     wksp_xls = os.path.join(workspace, 'input_spreadsheets')
-    aoi = os.path.join(workspace, 'test_data', 'aoi_test_2.shp')
+    aoi = os.path.join(workspace, 'test_data', 'aoi_test_1.shp')
     out_wksp = os.path.join(workspace, 'outputs')
     
     
@@ -440,14 +458,14 @@ if __name__ == "__main__":
     #bcgw_user = 'XXXX'
     bcgw_pwd = os.getenv('bcgw_pwd')
     #bcgw_pwd = 'XXXX'
-    connection, cursor = connect_to_DB (bcgw_user,bcgw_pwd,hostname)
+    connection, cursor = connect_to_Oracle (bcgw_user,bcgw_pwd,hostname)
     
     print ('\nLoading SQL queries')
     sql = load_queries ()
     
     
     print ('\nReading User inputs: AOI.')
-    input_src = 'AOI' # Possible values are "TANTALIS" and AOI
+    input_src = 'TANTALIS' # Possible values are "TANTALIS" and AOI
     if input_src == 'AOI':
         print('....Reading the AOI file')
         gdf_aoi = esri_to_gdf (aoi)
@@ -528,7 +546,7 @@ if __name__ == "__main__":
             else:
                 query= sql ['overlay_wkb'].format (cols=cols,tab=table,radius=radius,
                                                      geom_col=geom_col,def_query=def_query)
-                cursor.setinputsizes(wkb_aoi=cx_Oracle.BLOB) # set the WKB as oracle BLOB
+                cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB) # set the WKB as oracle BLOB
                 bvars_intr = {'wkb_aoi':wkb_aoi,'srid':srid,'srid_t':str(srid_t)}
                 
             df_all= read_query(connection,cursor,query,bvars_intr) 
@@ -622,3 +640,14 @@ if __name__ == "__main__":
     mins = int (t_sec/60)
     secs = int (t_sec%60)
     print ('\nProcessing Completed in {} minutes and {} seconds'.format (mins,secs))
+
+
+
+    '''
+    Execution stats (geopandas):
+        west_coast:
+            - AOI 1 -big:
+            - AOI 2 -medium: 4m27s(h), 2m20s(o)
+            - TANTALIS -big: 
+            - TANTALIS -medium: 
+    '''
