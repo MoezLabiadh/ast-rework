@@ -454,14 +454,38 @@ def write_xlsx (results,df_stat,workspace):
     df_res['List of conflicts'] = ""
     df_res['Map'] = ""
     
+    # Create a list to hold expanded rows
+    expanded_rows = []
+    
     for index, row in df_res.iterrows():
-        for k, v in  results.items():
-            if row['item'] == k and v.shape[0]>0:
+        has_conflicts = False
+        for k, v in results.items():
+            if row['item'] == k and v.shape[0] > 0:
+                has_conflicts = True
                 v = v.drop('RESULT', axis=1)
-                v['Result'] = v[v.columns].apply(lambda row: ','.join(row.values.astype(str)), axis=1)
-                res_all = " ; ".join (str(x) for x in v['Result'].to_list()) 
-                df_res.loc[index, 'List of conflicts'] = res_all
-                df_res.loc[index, 'Map'] = '=HYPERLINK("{}", "View Map")'.format(os.path.join(workspace,'maps',k+'.html'))
+                v['Result'] = v[v.columns].apply(lambda row: '; '.join(row.values.astype(str)), axis=1)
+                
+                # Create a separate row for each conflict
+                for conflict in v['Result'].to_list():
+                    expanded_rows.append({
+                        'Category': row['Category'],
+                        'item': row['item'],
+                        'List of conflicts': str(conflict),
+                        'Map': '=HYPERLINK("{}", "View Map")'.format(os.path.join(workspace,'maps',k+'.html'))
+                    })
+                break
+        
+        # If no conflicts found, add the original row with empty conflicts
+        if not has_conflicts:
+            expanded_rows.append({
+                'Category': row['Category'],
+                'item': row['item'],
+                'List of conflicts': '',
+                'Map': ''
+            })
+    
+    # Create new dataframe from expanded rows
+    df_res = pd.DataFrame(expanded_rows)
 
     filename = os.path.join(workspace, 'AST_lite_TAB3.xlsx')
     sheetname = 'Conflicts & Constraints'
@@ -487,7 +511,6 @@ def write_xlsx (results,df_stat,workspace):
     col_names = [{'header': col_name} for col_name in df_res.columns]
     worksheet.add_table(0, 0, df_res.shape[0]+1, df_res.shape[1]-1,{'columns': col_names})
     
-    #writer.save()
     writer.close()
 
 
