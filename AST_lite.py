@@ -250,26 +250,34 @@ def get_radius (item_index, df_stat):
     return radius
 
 
-def apply_rectify_fix(query, table_name, geom_col):
+def apply_curve_fix(query, table_name, geom_col):
     """
-    Apply SDO_UTIL.RECTIFY_GEOMETRY fix for specific problematic tables
-    with Arc/Curve geometries
+    Apply geometry validation filter for specific problematic tables
+    with Arc/Curve geometries that cannot be processed directly.
+    
+    Uses SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT to filter out only geometries
+    with ORA-13347 arc errors, keeping all other valid geometries.
     """
-    # List of tables that need RECTIFY_GEOMETRY fix
+    # List of tables that need geometry validation filter
     PROBLEMATIC_TABLES = [
-        'WHSE_CADASTRE.PMBC_PARCEL_FABRIC_POLY_FA_SVW'
+        'WHSE_CADASTRE.PMBC_PARCEL_FABRIC_POLY_FA_SVW',
+        'WHSE_CADASTRE.PMBC_PARCEL_FABRIC_POLY_SVW'
     ]
     
     # Only apply fix to problematic tables
     if table_name not in PROBLEMATIC_TABLES:
         return query
     
-    print('.......applying RECTIFY_GEOMETRY fix to SDO_DISTANCE for problematic table')
+    print('.......applying SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT filter to exclude ORA-13347 arc errors')
+    print('.......Note: Only geometries with arc coordinate errors (13347) will be excluded')
     
-    # Wrap geometry in SDO_GEOM.SDO_DISTANCE calls
+    # Add validation check to WHERE clause - only exclude 13347 errors
+    validation_clause = f"SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT(b.{geom_col}, 0.5) NOT LIKE '%13347%'\n  AND "
+    
+    # Insert the validation before the SDO_WITHIN_DISTANCE clause
     query = query.replace(
-        f'SDO_GEOM.SDO_DISTANCE(b.{geom_col},',
-        f'SDO_GEOM.SDO_DISTANCE(SDO_UTIL.RECTIFY_GEOMETRY(b.{geom_col}, 0.05),'
+        'WHERE SDO_WITHIN_DISTANCE',
+        f'WHERE {validation_clause}SDO_WITHIN_DISTANCE'
     )
     
     return query
@@ -479,7 +487,7 @@ if __name__ == "__main__":
     #paths
     workspace = r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework"
     wksp_xls = os.path.join(workspace, 'input_spreadsheets')
-    aoi = os.path.join(workspace, 'test_data', 'aoi_test_1.shp')
+    aoi = os.path.join(workspace, 'test_data', 'aoi_test_3.shp')
     out_wksp = os.path.join(workspace, 'outputs')
     
     
@@ -600,7 +608,7 @@ if __name__ == "__main__":
                 bvars_intr = {'wkb_aoi':wkb_aoi, 'srid':int(srid)}
             
             # Apply RECTIFY fix for problematic tables
-            query = apply_rectify_fix(query, table, geom_col)
+            query = apply_curve_fix(query, table, geom_col)
             
             df_all= read_query(connection,cursor,query,bvars_intr)
             
@@ -662,7 +670,7 @@ if __name__ == "__main__":
         
         # add the dataframe to the resuls dictionnary
         results[item] =  df_all_res
- 
+        '''
         if ov_nbr > 0:
             print ('.....generating a map.')
             gdf_intr = df_2_gdf (df_all, 3005)
@@ -680,7 +688,7 @@ if __name__ == "__main__":
             gdf_intr[col_lbl] = gdf_intr[col_lbl].astype(str) 
             
             make_status_map (gdf_aoi, gdf_intr, col_lbl, item, out_wksp)
- 
+        '''
         
         counter += 1
     
