@@ -18,7 +18,7 @@ Arguments:   - Output location (workspace)
                     - Disposition ID
                     - Parcel ID
                 
-Author:      Moez Labiadh - GeoBC
+Author:      Moez Labiadh
 
 Created:     2023-01-12
 Updated:     2025-12-15
@@ -320,7 +320,26 @@ def load_queries ():
                     WHERE SDO_WITHIN_DISTANCE (b.{geom_col}, 
                                                SDO_GEOMETRY(:wkb_aoi, :srid),'distance = {radius}') = 'TRUE'
                         {def_query}   
-                    """ 
+                                  """ 
+    
+    # Query for tables with SRID mismatch - transforms AOI to match table SRID
+    sql ['overlay_wkb_transform'] = """
+                    SELECT {cols},
+                    
+                           CASE WHEN SDO_GEOM.SDO_DISTANCE(b.{geom_col}, 
+                                    SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t), 0.5) = 0 
+                            THEN 'INTERSECT' 
+                             ELSE 'Within ' || TO_CHAR({radius}) || ' m'
+                              END AS RESULT,
+                              
+                           SDO_UTIL.TO_WKTGEOMETRY(SDO_CS.TRANSFORM(b.{geom_col}, :srid_t, :srid)) SHAPE
+                    
+                    FROM {tab} b
+                    
+                    WHERE SDO_WITHIN_DISTANCE (b.{geom_col}, 
+                                SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t),'distance = {radius}') = 'TRUE'
+                        {def_query}   
+                    """
     return sql
 
 
@@ -477,12 +496,16 @@ if __name__ == "__main__":
     
     
     print ('\nReading User inputs: AOI.')
-    input_src = 'TANTALIS' # Possible values are "TANTALIS" and AOI
+    input_src = 'AOI' # Possible values are "TANTALIS" and AOI
 
     if input_src == 'AOI':
         print('....Reading the AOI file')
         gdf_aoi = esri_to_gdf (aoi)
     
+        if gdf_aoi.shape[0] > 1:
+            gdf_aoi =  multipart_to_singlepart(gdf_aoi)
+
+       
     elif input_src == 'TANTALIS':
      
         #test tenure - big
@@ -519,10 +542,7 @@ if __name__ == "__main__":
     else:
         raise Exception('Possible input sources are TANTALIS and AOI!')
     
-    if gdf_aoi.shape[0] > 1:
-        gdf_aoi =  multipart_to_singlepart(gdf_aoi)
-    
-    # Convert AOI to WKB
+    # Convert AOI to WKB regardless of source (unified approach)
     print('....Extracting WKB and SRID from AOI')
     wkb_aoi, srid = get_wkb_srid (gdf_aoi)
     
@@ -560,23 +580,29 @@ if __name__ == "__main__":
             sridQuery = sql ['srid']
             geom_col = get_geom_colname (connection,cursor,table,geomQuery)
             
-            try:
-                srid_t = get_geom_srid (connection,cursor,table,geom_col,sridQuery) 
-            except:
-                srid_t = 3005
+            # Check if SRID mismatch exists
+            srid_t = get_geom_srid (connection,cursor,table,geom_col,sridQuery) 
+            srid_mismatch = (srid_t == 1000003005)
             
-            # Use WKB query for all BCGW tables
-            query = sql ['overlay_wkb'].format(
-                cols=cols, tab=table, radius=radius,
-                geom_col=geom_col, def_query=def_query)
-            
-            cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
-            bvars_intr = {'wkb_aoi':wkb_aoi,'srid':srid}
+            if srid_mismatch:
+                print(f'.......SRID mismatch detected (table SRID: {srid_t}), using transform query')
+                query = sql ['overlay_wkb_transform'].format(
+                    cols=cols, tab=table, radius=radius,
+                    geom_col=geom_col, def_query=def_query)
+                cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
+                bvars_intr = {'wkb_aoi':wkb_aoi, 'srid':int(srid), 'srid_t':int(srid_t)}
+            else:
+                # Use standard WKB query for matching SRIDs
+                query = sql ['overlay_wkb'].format(
+                    cols=cols, tab=table, radius=radius,
+                    geom_col=geom_col, def_query=def_query)
+                cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
+                bvars_intr = {'wkb_aoi':wkb_aoi, 'srid':int(srid)}
             
             # Apply RECTIFY fix for problematic tables
             query = apply_rectify_fix(query, table, geom_col)
             
-            df_all= read_query(connection,cursor,query,bvars_intr) 
+            df_all= read_query(connection,cursor,query,bvars_intr)
             
                 
         else:
@@ -636,7 +662,7 @@ if __name__ == "__main__":
         
         # add the dataframe to the resuls dictionnary
         results[item] =  df_all_res
-
+ 
         if ov_nbr > 0:
             print ('.....generating a map.')
             gdf_intr = df_2_gdf (df_all, 3005)
@@ -654,7 +680,7 @@ if __name__ == "__main__":
             gdf_intr[col_lbl] = gdf_intr[col_lbl].astype(str) 
             
             make_status_map (gdf_aoi, gdf_intr, col_lbl, item, out_wksp)
-
+ 
         
         counter += 1
     
@@ -666,14 +692,3 @@ if __name__ == "__main__":
     mins = int (t_sec/60)
     secs = int (t_sec%60)
     print ('\nProcessing Completed in {} minutes and {} seconds'.format (mins,secs))
-
-
-
-    '''
-    Execution stats (geopandas):
-        west_coast:
-            - AOI 1 -big:
-            - AOI 2 -medium: 4m27s(h), 2m20s(o)
-            - TANTALIS -big: 
-            - TANTALIS -medium: 5m30s(h)
-    '''
