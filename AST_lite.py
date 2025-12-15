@@ -18,8 +18,10 @@ Arguments:   - Output location (workspace)
                     - Disposition ID
                     - Parcel ID
                 
-Author:      Moez Labiadh
+Author:      Moez Labiadh - GeoBC
+
 Created:     2023-01-12
+Updated:     2025-12-15
 """
 
 
@@ -80,19 +82,6 @@ def esri_to_gdf (aoi):
     
     return gdf
            
-
-def df_2_gdf(df, crs):
-    """ Return a geopandas gdf based on a df with Geometry column"""
-    df['SHAPE'] = df['SHAPE'].astype(str)
-    
-    df['geometry'] = df['SHAPE'].apply(lambda x: from_wkt(x))
-    
-    gdf = gpd.GeoDataFrame(df, geometry='geometry', crs=f"EPSG:{crs}")
-    gdf = gdf.drop(columns=['SHAPE'])
-    
-    return gdf
-
-
 
 def df_2_gdf(df, crs):
     """ Return a geopandas gdf based on a df with Geometry column, handling curve geometries"""
@@ -187,7 +176,6 @@ def read_input_spreadsheets (wksp_xls,region):
 
 def get_table_cols (item_index,df_stat):
     """Returns table and field names from the AST datasets spreadsheet"""
-    #df_stat = df_stat.loc[df_stat['Featureclass_Name(valid characters only)'] == item]
     df_stat_item = df_stat.loc[[item_index]]
     df_stat_item.fillna(value='nan',inplace=True)
 
@@ -224,7 +212,6 @@ def get_table_cols (item_index,df_stat):
 
 def get_def_query (item_index,df_stat):
     """Returns an ORacle SQL formatted def query (if any) from the AST datasets spreadsheet"""
-    #df_stat = df_stat.loc[df_stat['Featureclass_Name(valid characters only)'] == item]
     df_stat_item = df_stat.loc[[item_index]]
     df_stat_item.fillna(value='nan',inplace=True)
 
@@ -255,7 +242,6 @@ def get_def_query (item_index,df_stat):
 
 def get_radius (item_index, df_stat):
     """Returns the buffer distance (if any) from the AST common datasets spreadsheet"""
-    #df_stat = df_stat.loc[df_stat['Featureclass_Name(valid characters only)'] == item]
     df_stat_item = df_stat.loc[[item_index]]
     df_stat_item.fillna(value=0,inplace=True)
     df_stat_item['Buffer_Distance'] = df_stat_item['Buffer_Distance'].astype(int)
@@ -281,8 +267,6 @@ def apply_rectify_fix(query, table_name, geom_col):
     print('.......applying RECTIFY_GEOMETRY fix to SDO_DISTANCE for problematic table')
     
     # Wrap geometry in SDO_GEOM.SDO_DISTANCE calls
-    # This handles both TANTALIS queries (b.geom_col, a.SHAPE) 
-    # and AOI/WKB queries (b.geom_col, SDO_GEOMETRY)
     query = query.replace(
         f'SDO_GEOM.SDO_DISTANCE(b.{geom_col},',
         f'SDO_GEOM.SDO_DISTANCE(SDO_UTIL.RECTIFY_GEOMETRY(b.{geom_col}, 0.05),'
@@ -320,57 +304,11 @@ def load_queries ():
                     FROM {tab} s
                     WHERE rownum = 1
                    """
-                           
-    sql ['overlay'] = """
-                    SELECT {cols},
-                    
-                           CASE WHEN SDO_GEOM.SDO_DISTANCE(b.{geom_col}, a.SHAPE, 0.5) = 0 
-                            THEN 'INTERSECT' 
-                             ELSE 'Within ' || TO_CHAR({radius}) || ' m'
-                              END AS RESULT,
-                              
-                           SDO_UTIL.TO_WKTGEOMETRY(b.{geom_col}) SHAPE
-                    
-                    FROM WHSE_TANTALIS.TA_CROWN_TENURES_SVW a, {tab} b
-                    
-                    WHERE a.CROWN_LANDS_FILE = :file_nbr
-                        AND a.DISPOSITION_TRANSACTION_SID = :disp_id
-                        AND a.INTRID_SID = :parcel_id
-                        
-                        AND SDO_WITHIN_DISTANCE (b.{geom_col}, a.SHAPE,'distance = {radius}') = 'TRUE'
-                        
-                        {def_query}  
-                    """ 
-
-    #  Query for tables with SRID mismatch - transforms AOI to match table SRID
-    sql ['overlay_srid_mismatch'] = """
-                    SELECT {cols},
-                    
-                           CASE WHEN SDO_GEOM.SDO_DISTANCE(b.{geom_col}, 
-                                    SDO_CS.TRANSFORM(a.SHAPE, 3005, {srid_t}), 0.5) = 0 
-                            THEN 'INTERSECT' 
-                             ELSE 'Within ' || TO_CHAR({radius}) || ' m'
-                              END AS RESULT,
-                              
-                           SDO_UTIL.TO_WKTGEOMETRY(SDO_CS.TRANSFORM(b.{geom_col}, {srid_t}, 3005)) SHAPE
-                    
-                    FROM WHSE_TANTALIS.TA_CROWN_TENURES_SVW a, {tab} b
-                    
-                    WHERE a.CROWN_LANDS_FILE = :file_nbr
-                        AND a.DISPOSITION_TRANSACTION_SID = :disp_id
-                        AND a.INTRID_SID = :parcel_id
-                        
-                        AND SDO_WITHIN_DISTANCE (b.{geom_col}, 
-                                SDO_CS.TRANSFORM(a.SHAPE, 3005, {srid_t}),'distance = {radius}') = 'TRUE'
-                        
-                        {def_query}  
-                    """     
-    
                                  
     sql ['overlay_wkb'] = """
                     SELECT {cols},
                     
-                           CASE WHEN SDO_GEOM.SDO_DISTANCE(b.{geom_col}, SDO_GEOMETRY(:wkb_aoi, :srid_t), 0.5) = 0 
+                           CASE WHEN SDO_GEOM.SDO_DISTANCE(b.{geom_col}, SDO_GEOMETRY(:wkb_aoi, :srid), 0.5) = 0 
                             THEN 'INTERSECT' 
                              ELSE 'Within ' || TO_CHAR({radius}) || ' m'
                               END AS RESULT,
@@ -539,19 +477,12 @@ if __name__ == "__main__":
     
     
     print ('\nReading User inputs: AOI.')
-    input_src = 'AOI' # Possible values are "TANTALIS" and AOI
+    input_src = 'TANTALIS' # Possible values are "TANTALIS" and AOI
 
     if input_src == 'AOI':
         print('....Reading the AOI file')
         gdf_aoi = esri_to_gdf (aoi)
     
-        if gdf_aoi.shape[0] > 1:
-            gdf_aoi =  multipart_to_singlepart(gdf_aoi)
-        
-        wkb_aoi, srid = get_wkb_srid (gdf_aoi)
-
-
-       
     elif input_src == 'TANTALIS':
      
         #test tenure - big
@@ -574,17 +505,26 @@ if __name__ == "__main__":
         bvars_aoi = {'file_nbr': in_fileNbr,
                      'disp_id': in_dispID, 'parcel_id': in_prclID}
         
+        print('....Querying TANTALIS for AOI geometry')
         df_aoi= read_query(connection,cursor,sql ['aoi'],bvars_aoi) 
         
         if df_aoi.shape[0] < 1:
             raise Exception('Parcel not in TANTALIS. Please check inputs!')
             
         else:
+            print('....Converting TANTALIS result to GeoDataFrame')
             gdf_aoi = df_2_gdf (df_aoi, 3005)
     
                 
     else:
         raise Exception('Possible input sources are TANTALIS and AOI!')
+    
+    if gdf_aoi.shape[0] > 1:
+        gdf_aoi =  multipart_to_singlepart(gdf_aoi)
+    
+    # Convert AOI to WKB
+    print('....Extracting WKB and SRID from AOI')
+    wkb_aoi, srid = get_wkb_srid (gdf_aoi)
     
     print ('\nReading the AST datasets spreadsheet.')
     region = 'west_coast' #**************USER INPUT: REGION*************
@@ -625,33 +565,15 @@ if __name__ == "__main__":
             except:
                 srid_t = 3005
             
-            # Check if SRID mismatch exists (only for TANTALIS input)
-            srid_mismatch = (input_src == 'TANTALIS' and srid_t == 1000003005)
+            # Use WKB query for all BCGW tables
+            query = sql ['overlay_wkb'].format(
+                cols=cols, tab=table, radius=radius,
+                geom_col=geom_col, def_query=def_query)
             
-            if srid_mismatch:
-                print(f'.......SRID mismatch detected (table SRID: {srid_t}), using optimized query')
+            cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
+            bvars_intr = {'wkb_aoi':wkb_aoi,'srid':srid}
             
-            if input_src == 'TANTALIS':
-                if srid_mismatch:
-                    query = sql ['overlay_srid_mismatch'].format(
-                        cols=cols, tab=table, radius=radius,
-                        geom_col=geom_col, def_query=def_query, srid_t=srid_t)
-                else:
-                    query = sql ['overlay'].format(
-                        cols=cols, tab=table, radius=radius,
-                        geom_col=geom_col, def_query=def_query)
-                
-                bvars_intr = {'file_nbr':in_fileNbr,
-                              'disp_id':in_dispID,'parcel_id': in_prclID}
-            else:
-                # WKB method (AOI input)
-                query = sql ['overlay_wkb'].format(
-                    cols=cols, tab=table, radius=radius,
-                    geom_col=geom_col, def_query=def_query)
-                cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
-                bvars_intr = {'wkb_aoi':wkb_aoi,'srid':srid,'srid_t':str(srid_t)}
-            
-            # Apply RECTIFY fix for problematic tables (works for both TANTALIS and AOI)
+            # Apply RECTIFY fix for problematic tables
             query = apply_rectify_fix(query, table, geom_col)
             
             df_all= read_query(connection,cursor,query,bvars_intr) 
@@ -714,7 +636,7 @@ if __name__ == "__main__":
         
         # add the dataframe to the resuls dictionnary
         results[item] =  df_all_res
-    
+
         if ov_nbr > 0:
             print ('.....generating a map.')
             gdf_intr = df_2_gdf (df_all, 3005)
@@ -732,8 +654,7 @@ if __name__ == "__main__":
             gdf_intr[col_lbl] = gdf_intr[col_lbl].astype(str) 
             
             make_status_map (gdf_aoi, gdf_intr, col_lbl, item, out_wksp)
-    
- 
+
         
         counter += 1
     
