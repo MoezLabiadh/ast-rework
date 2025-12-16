@@ -18,7 +18,7 @@ Arguments:   - Output location (workspace)
                     - Disposition ID
                     - Parcel ID
                 
-Author:      Moez Labiadh
+Author:      Moez Labiadh - GeoBC
 
 Created:     2023-01-12
 Updated:     2025-12-15
@@ -367,15 +367,113 @@ def get_geom_colname (connection,cursor,table,geomQuery):
 
 
 def get_geom_srid (connection,cursor,table,geom_col,sridQuery):
-    """ Returns the SRID of the BCGW table"""
+    """ Returns the SRID of the BCGW table, or None if table is empty"""
+    try:
+        sridQuery = sridQuery.format(tab=table,geom_col=geom_col)
+        df_s = read_query(connection,cursor,sridQuery,{})
+        
+        if df_s.empty or df_s.shape[0] == 0:
+            print(f'.......WARNING: Table {table} is empty, cannot determine SRID')
+            return None
+            
+        srid_t = df_s['SP_REF'].iloc[0]
+        return srid_t
+        
+    except IndexError:
+        print(f'.......WARNING: Table {table} appears to be empty, cannot determine SRID')
+        return None
+    except Exception as e:
+        print(f'.......ERROR getting SRID for {table}: {e}')
+        return None
 
-    sridQuery = sridQuery.format(tab=table,geom_col=geom_col)
-    df_s = read_query(connection,cursor,sridQuery,{})
+
+def get_oracle_columns(connection, cursor, table):
+    """
+    Retrieves the list of available columns for an Oracle table.
+    Returns empty list if table doesn't exist or query fails.
+    """
+    try:
+        query = """
+            SELECT column_name 
+            FROM all_tab_columns 
+            WHERE owner = :owner 
+                AND table_name = :tab_name
+        """
+        
+        el_list = table.split('.')
+        bvars = {
+            'owner': el_list[0].strip(),
+            'tab_name': el_list[1].strip()
+        }
+        
+        df_cols = read_query(connection, cursor, query, bvars)
+        
+        if df_cols.empty:
+            return []
+            
+        return df_cols['COLUMN_NAME'].tolist()
+        
+    except Exception as e:
+        print(f'.......ERROR retrieving columns for {table}: {e}')
+        return []
+
+
+def validate_columns(cols, available_cols, item, table, is_oracle=True):
+    """
+    Validates that requested columns exist in the dataset.
+    Returns validated columns list and list of missing columns.
+    """
+    missing_cols = []
     
-    srid_t = df_s['SP_REF'].iloc[0]
-
-    return srid_t
-
+    if is_oracle:
+        # For Oracle datasets, cols is a string like "b.COL1,b.COL2"
+        if isinstance(cols, str):
+            requested = [c.strip().replace('b.', '') for c in cols.split(',')]
+        else:
+            requested = cols
+            
+        # Check which columns are missing
+        for col in requested:
+            if col not in available_cols and col != 'OBJECTID':
+                missing_cols.append(col)
+        
+        # If all columns are missing, fall back to OBJECTID
+        if len(missing_cols) == len(requested):
+            print(f'.......WARNING: All requested columns missing, using OBJECTID')
+            return 'b.OBJECTID', missing_cols
+        
+        # Remove missing columns from the list
+        valid_cols = [c for c in requested if c not in missing_cols]
+        if valid_cols:
+            validated = ','.join('b.' + x for x in valid_cols)
+        else:
+            validated = 'b.OBJECTID'
+            
+    else:
+        # For local datasets (shp/gdb), cols is a list
+        if isinstance(cols, str):
+            requested = [cols]
+        else:
+            requested = cols
+            
+        for col in requested:
+            if col not in available_cols:
+                missing_cols.append(col)
+        
+        # Remove missing columns
+        valid_cols = [c for c in requested if c not in missing_cols]
+        
+        # If all columns missing, use first available column
+        if not valid_cols and available_cols:
+            valid_cols = [available_cols[0]]
+            print(f'.......WARNING: All requested columns missing, using {available_cols[0]}')
+        
+        validated = valid_cols
+    
+    if missing_cols:
+        print(f'.......WARNING: Missing columns in {table}: {", ".join(missing_cols)}')
+    
+    return validated, missing_cols
 
 
 def make_status_map (gdf_aoi, gdf_intr, col_lbl, item, workspace):
@@ -494,9 +592,7 @@ if __name__ == "__main__":
     print ('Connecting to BCGW.')
     hostname = 'bcgw.bcgov/idwprod1.bcgov'
     bcgw_user = os.getenv('bcgw_user')
-    #bcgw_user = 'XXXX'
     bcgw_pwd = os.getenv('bcgw_pwd')
-    #bcgw_pwd = 'XXXX'
     connection, cursor = connect_to_Oracle (bcgw_user,bcgw_pwd,hostname)
     
     print ('\nLoading SQL queries')
@@ -504,24 +600,13 @@ if __name__ == "__main__":
     
     
     print ('\nReading User inputs: AOI.')
-    input_src = 'AOI' # Possible values are "TANTALIS" and AOI
+    input_src = 'TANTALIS' # Possible values are "TANTALIS" and AOI
 
     if input_src == 'AOI':
         print('....Reading the AOI file')
         gdf_aoi = esri_to_gdf (aoi)
-    
-        if gdf_aoi.shape[0] > 1:
-            gdf_aoi =  multipart_to_singlepart(gdf_aoi)
-
        
     elif input_src == 'TANTALIS':
-     
-        #test tenure - big
-        #fileNbr = '0327094'
-        #dispID  =  146307
-        #prclID  =  895143
-        
-        #test tenure - small
         fileNbr = '1413717'
         dispID  = 927132
         prclID  = 953951
@@ -545,10 +630,13 @@ if __name__ == "__main__":
         else:
             print('....Converting TANTALIS result to GeoDataFrame')
             gdf_aoi = df_2_gdf (df_aoi, 3005)
-    
-                
+               
     else:
         raise Exception('Possible input sources are TANTALIS and AOI!')
+    
+    if gdf_aoi.shape[0] > 1:
+        print ('....Converting multipart AOI to singlepart AOI')
+        gdf_aoi =  multipart_to_singlepart(gdf_aoi)
     
     # Convert AOI to WKB regardless of source (unified approach)
     print('....Extracting WKB and SRID from AOI')
@@ -563,6 +651,7 @@ if __name__ == "__main__":
     
     print ('\nRunning the analysis.')
     results = {} # this dictionnary will hold the overlay results
+    failed_datasets = []  # Track datasets that failed to process
     
     item_count = df_stat.shape[0]
     counter = 1
@@ -572,128 +661,206 @@ if __name__ == "__main__":
         
         print ('\n****working on item {} of {}: {}***'.format(counter,item_count,item))
         
-        print ('.....getting table and column names')
-        table, cols, col_lbl = get_table_cols (item_index,df_stat)
+        try:
+            print ('.....getting table and column names')
+            table, cols, col_lbl = get_table_cols (item_index,df_stat)
+            
+            print ('.....getting definition query (if any)')
+            def_query = get_def_query (item_index,df_stat)
         
-        print ('.....getting definition query (if any)')
-        def_query = get_def_query (item_index,df_stat)
-    
-        print ('.....getting buffer distance (if any)')
-        radius = get_radius (item_index, df_stat)  
-         
-        print ('.....running Overlay Analysis.')
-        
-        if table.startswith('WHSE') or table.startswith('REG'): 
-            geomQuery = sql ['geomCol']
-            sridQuery = sql ['srid']
-            geom_col = get_geom_colname (connection,cursor,table,geomQuery)
+            print ('.....getting buffer distance (if any)')
+            radius = get_radius (item_index, df_stat)  
+             
+            print ('.....running Overlay Analysis.')
             
-            # Check if SRID mismatch exists
-            srid_t = get_geom_srid (connection,cursor,table,geom_col,sridQuery) 
-            srid_mismatch = (srid_t == 1000003005)
-            
-            if srid_mismatch:
-                print(f'.......SRID mismatch detected (table SRID: {srid_t}), using transform query')
-                query = sql ['overlay_wkb_transform'].format(
-                    cols=cols, tab=table, radius=radius,
-                    geom_col=geom_col, def_query=def_query)
-                cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
-                bvars_intr = {'wkb_aoi':wkb_aoi, 'srid':int(srid), 'srid_t':int(srid_t)}
-            else:
-                # Use standard WKB query for matching SRIDs
-                query = sql ['overlay_wkb'].format(
-                    cols=cols, tab=table, radius=radius,
-                    geom_col=geom_col, def_query=def_query)
-                cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
-                bvars_intr = {'wkb_aoi':wkb_aoi, 'srid':int(srid)}
-            
-            # Apply RECTIFY fix for problematic tables
-            query = apply_curve_fix(query, table, geom_col)
-            
-            df_all= read_query(connection,cursor,query,bvars_intr)
-            
+            if table.startswith('WHSE') or table.startswith('REG'): 
+                # Handle Oracle datasets
+                geomQuery = sql ['geomCol']
+                sridQuery = sql ['srid']
+                geom_col = get_geom_colname (connection,cursor,table,geomQuery)
                 
-        else:
-            try:
-                gdf_trg = esri_to_gdf (table)
+                # Check if SRID mismatch exists
+                srid_t = get_geom_srid (connection,cursor,table,geom_col,sridQuery)
                 
-                if not gdf_trg.crs.to_epsg() == 3005:
-                    gdf_trg = gdf_trg.to_crs({'init': 'epsg:3005'})
-                    
-                gdf_intr = gpd.overlay(gdf_aoi, gdf_trg, how='intersection')
+                # If table is empty (srid_t is None), skip this dataset
+                if srid_t is None:
+                    print(f'.......SKIPPING dataset {item} - table is empty')
+                    failed_datasets.append({'item': item, 'reason': 'Empty table'})
+                    results[item] = pd.DataFrame([])
+                    counter += 1
+                    continue
                 
+                # Validate columns exist in Oracle table
+                print('.....validating columns')
+                available_cols = get_oracle_columns(connection, cursor, table)
                 
-                # TEMPORARY FIX:  for Empty/Wrong column names in the REGION AST input spreadsheet
-                gdf_cols = [col for col in gdf_trg.columns]  
-                diffs = list(set(cols).difference(gdf_cols))
-                for diff in diffs:
-                    cols.remove(diff)
-                if len(cols) ==0:
-                    cols.append(gdf_trg.columns[0])
-                 
-                df_intr = pd.DataFrame(gdf_intr)
-                df_intr ['RESULT'] = 'INTERSECT'
+                if not available_cols:
+                    print(f'.......SKIPPING dataset {item} - could not retrieve table columns')
+                    failed_datasets.append({'item': item, 'reason': 'Could not retrieve table columns'})
+                    results[item] = pd.DataFrame([])
+                    counter += 1
+                    continue
                 
-                if radius > 0:
-                    aoi_buf = gdf_aoi.buffer(radius)
-                    gdf_aoi_buf = gpd.GeoDataFrame(gpd.GeoSeries(aoi_buf))
-                    gdf_aoi_buf = gdf_aoi_buf.rename(columns={0:'geometry'}).set_geometry('geometry')
-                    gdf_aoi_buf_ext = gpd.overlay(gdf_aoi, gdf_aoi_buf, how='symmetric_difference')  
-                    gdf_buf= gpd.overlay(gdf_aoi_buf_ext, gdf_trg, how='intersection')
-                    
-                    df_buf = pd.DataFrame(gdf_buf)
-                    df_buf ['RESULT'] = 'WITHIN {} m'.format(str(radius))   
-                    
-                    df_all =  pd.concat([df_intr, df_buf])
-                    
+                validated_cols, missing_cols = validate_columns(cols, available_cols, item, table, is_oracle=True)
+                
+                if missing_cols:
+                    failed_datasets.append({'item': item, 'reason': f'Missing columns: {", ".join(missing_cols)}'})
+                
+                cols = validated_cols
+                
+                srid_mismatch = (srid_t == 1000003005)
+                
+                if srid_mismatch:
+                    print(f'.......SRID mismatch detected (table SRID: {srid_t}), using transform query')
+                    query = sql ['overlay_wkb_transform'].format(
+                        cols=cols, tab=table, radius=radius,
+                        geom_col=geom_col, def_query=def_query)
+                    cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
+                    bvars_intr = {'wkb_aoi':wkb_aoi, 'srid':int(srid), 'srid_t':int(srid_t)}
                 else:
-                    df_all = df_intr
+                    # Use standard WKB query for matching SRIDs
+                    query = sql ['overlay_wkb'].format(
+                        cols=cols, tab=table, radius=radius,
+                        geom_col=geom_col, def_query=def_query)
+                    cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
+                    bvars_intr = {'wkb_aoi':wkb_aoi, 'srid':int(srid)}
                 
-                df_all.rename(columns={'geometry':'SHAPE'},inplace=True)
+                # Apply RECTIFY fix for problematic tables
+                query = apply_curve_fix(query, table, geom_col)
                 
-            except:
-                print ('.......ERROR: the Source Dataset does NOT exist!')
-                df_all = pd.DataFrame([])
-        
-        
-        if isinstance(cols, str) == True:
-            l = cols.split(",")
-            cols = [x[2:] for x in l]
-    
-        cols.append('RESULT')
-        
-        df_all_res = df_all[cols]  
-        
-        
-        ov_nbr = df_all_res.shape[0]
-        print ('.....number of overlaps: {}'.format(ov_nbr))
-        
-        # add the dataframe to the resuls dictionnary
-        results[item] =  df_all_res
-        '''
-        if ov_nbr > 0:
-            print ('.....generating a map.')
-            gdf_intr = df_2_gdf (df_all, 3005)
+                df_all= read_query(connection,cursor,query,bvars_intr)
+                
+                    
+            else:
+                # Handle local datasets (shp/gdb)
+                try:
+                    # Check if file exists - handle both shapefiles and featureclasses
+                    if '.gdb' in table:
+                        # For featureclasses: check if the GDB exists
+                        gdb_path = table.split('.gdb')[0] + '.gdb'
+                        if not os.path.exists(gdb_path):
+                            print(f'.......ERROR: Geodatabase does not exist at path: {gdb_path}')
+                            failed_datasets.append({'item': item, 'reason': f'Geodatabase not found at path: {gdb_path}'})
+                            results[item] = pd.DataFrame([])
+                            counter += 1
+                            continue
+                    
+                    gdf_trg = esri_to_gdf (table)
+                    
+                    # Check if dataset is empty
+                    if gdf_trg.empty or gdf_trg.shape[0] == 0:
+                        print(f'.......WARNING: Dataset is empty: {table}')
+                        failed_datasets.append({'item': item, 'reason': 'Empty dataset'})
+                        results[item] = pd.DataFrame([])
+                        counter += 1
+                        continue
+                    
+                    if not gdf_trg.crs.to_epsg() == 3005:
+                        gdf_trg = gdf_trg.to_crs({'init': 'epsg:3005'})
+                    
+                    # Validate columns for local dataset
+                    print('.....validating columns')
+                    available_cols = [col for col in gdf_trg.columns if col != 'geometry']
+                    validated_cols, missing_cols = validate_columns(cols, available_cols, item, table, is_oracle=False)
+                    
+                    if missing_cols:
+                        failed_datasets.append({'item': item, 'reason': f'Missing columns: {", ".join(missing_cols)}'})
+                    
+                    cols = validated_cols
+                    
+                    gdf_intr = gpd.overlay(gdf_aoi, gdf_trg, how='intersection')
+                    
+                    df_intr = pd.DataFrame(gdf_intr)
+                    df_intr ['RESULT'] = 'INTERSECT'
+                    
+                    if radius > 0:
+                        aoi_buf = gdf_aoi.buffer(radius)
+                        gdf_aoi_buf = gpd.GeoDataFrame(gpd.GeoSeries(aoi_buf))
+                        gdf_aoi_buf = gdf_aoi_buf.rename(columns={0:'geometry'}).set_geometry('geometry')
+                        gdf_aoi_buf_ext = gpd.overlay(gdf_aoi, gdf_aoi_buf, how='symmetric_difference')  
+                        gdf_buf= gpd.overlay(gdf_aoi_buf_ext, gdf_trg, how='intersection')
+                        
+                        df_buf = pd.DataFrame(gdf_buf)
+                        df_buf ['RESULT'] = 'WITHIN {} m'.format(str(radius))   
+                        
+                        df_all =  pd.concat([df_intr, df_buf])
+                        
+                    else:
+                        df_all = df_intr
+                    
+                    df_all.rename(columns={'geometry':'SHAPE'},inplace=True)
+                    
+                except FileNotFoundError as e:
+                    print (f'.......ERROR: Dataset file not found: {table}')
+                    failed_datasets.append({'item': item, 'reason': f'File not found: {table}'})
+                    results[item] = pd.DataFrame([])
+                    counter += 1
+                    continue
+                except Exception as e:
+                    print (f'.......ERROR: Could not read dataset: {str(e)}')
+                    failed_datasets.append({'item': item, 'reason': f'Dataset error: {str(e)}'})
+                    results[item] = pd.DataFrame([])
+                    counter += 1
+                    continue
             
-            # FIX FOR MISSING LABEL COLUMN NAME
-            if col_lbl == 'nan': 
-                col_lbl = cols[0]
-                gdf_intr [col_lbl] = gdf_intr [col_lbl].astype(str)
             
-            # datetime columns are causing errors when plotting in Folium. Converting them to str
-            for col in gdf_intr.columns:
-                if gdf_intr[col].dtype == 'datetime64[ns]':
-                    gdf_intr[col] = gdf_intr[col].astype(str)
+            if isinstance(cols, str) == True:
+                l = cols.split(",")
+                cols = [x[2:] for x in l]
+        
+            cols.append('RESULT')
             
-            gdf_intr[col_lbl] = gdf_intr[col_lbl].astype(str) 
+            df_all_res = df_all[cols]  
             
-            make_status_map (gdf_aoi, gdf_intr, col_lbl, item, out_wksp)
-        '''
+            
+            ov_nbr = df_all_res.shape[0]
+            print ('.....number of overlaps: {}'.format(ov_nbr))
+            
+            # add the dataframe to the resuls dictionnary
+            results[item] =  df_all_res
+            
+            if ov_nbr > 0:
+                print ('.....generating a map.')
+                gdf_intr = df_2_gdf (df_all, 3005)
+                
+                # FIX FOR MISSING LABEL COLUMN NAME
+                if col_lbl == 'nan': 
+                    col_lbl = cols[0]
+                    gdf_intr [col_lbl] = gdf_intr [col_lbl].astype(str)
+                
+                # datetime columns are causing errors when plotting in Folium. Converting them to str
+                for col in gdf_intr.columns:
+                    if gdf_intr[col].dtype == 'datetime64[ns]':
+                        gdf_intr[col] = gdf_intr[col].astype(str)
+                
+                gdf_intr[col_lbl] = gdf_intr[col_lbl].astype(str) 
+                
+                make_status_map (gdf_aoi, gdf_intr, col_lbl, item, out_wksp)
+            
+        except Exception as e:
+            print(f'.......ERROR processing dataset {item}: {e}')
+            failed_datasets.append({'item': item, 'reason': str(e)})
+            results[item] = pd.DataFrame([])
         
         counter += 1
     
     print ('\nWriting Results to spreadsheet')
     write_xlsx (results,df_stat,out_wksp)
+    
+    # Print summary of failed datasets
+    if failed_datasets:
+        print('\n' + '='*80)
+        print('SUMMARY: The following datasets failed to process:')
+        print('='*80)
+        for failed in failed_datasets:
+            print(f"  - {failed['item']}")
+            print(f"    Reason: {failed['reason']}")
+        print(f'\nTotal failed datasets: {len(failed_datasets)} out of {item_count}')
+        print('='*80)
+    else:
+        print('\n' + '='*80)
+        print('SUCCESS: All datasets processed without errors!')
+        print('='*80)
     
     finish_t = timeit.default_timer() #finish time
     t_sec = round(finish_t-start_t)
