@@ -475,6 +475,14 @@ def validate_columns(cols, available_cols, item, table, is_oracle=True):
     return validated, missing_cols
 
 
+def simplify_geometries(gdf, tol=10, preserve_topology=True):
+    """ Simplifies geometries in a gdf for webmap display """
+    gdf = gdf.copy()
+    gdf["geometry"] = gdf.geometry.simplify(tolerance=tol, preserve_topology=preserve_topology)
+
+    return gdf
+
+
 def make_status_map (gdf_aoi, gdf_intr, col_lbl, item, workspace):
     """ Generates HTML Interactive maps of AOI and intersection geodataframes"""
     
@@ -834,7 +842,10 @@ if __name__ == "__main__":
                 
                 gdf_intr[col_lbl] = gdf_intr[col_lbl].astype(str) 
                 
-                make_status_map (gdf_aoi, gdf_intr, col_lbl, item, out_wksp)
+                # Simplify geometries for webmap display`
+                gdf_intr_s = simplify_geometries(gdf_intr, tol=10, preserve_topology=True)
+                # Gnerate the map
+                make_status_map (gdf_aoi, gdf_intr_s, col_lbl, item, out_wksp)
             
         except Exception as e:
             print(f'.......ERROR processing dataset {item}: {e}')
