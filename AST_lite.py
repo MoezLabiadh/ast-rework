@@ -250,36 +250,35 @@ def get_radius (item_index, df_stat):
     return radius
 
 
-def apply_curve_fix(query, table_name, geom_col):
+def filter_invalid_oracle_geom(query, table_name, geom_col):
     """
-    Apply geometry validation filter for specific problematic tables
-    with Arc/Curve geometries that cannot be processed directly.
-    
-    Uses SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT to filter out only geometries
-    with ORA-13347 arc errors, keeping all other valid geometries.
+    Apply geometry validation filter for specific problematic tables:
+    mainly Arc/Curve geometries that cannot be processed directly.
+
+    Keeps only valid geometries where SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT(...) = 'TRUE'.
     """
-    # List of tables that need geometry validation filter
     PROBLEMATIC_TABLES = [
         'WHSE_CADASTRE.PMBC_PARCEL_FABRIC_POLY_FA_SVW',
         'WHSE_CADASTRE.PMBC_PARCEL_FABRIC_POLY_SVW'
     ]
-    
-    # Only apply fix to problematic tables
+
     if table_name not in PROBLEMATIC_TABLES:
         return query
-    
-    print('.......applying SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT filter to exclude ORA-13347 arc errors')
-    print('.......Note: Only geometries with arc coordinate errors (13347) will be excluded')
-    
-    # Add validation check to WHERE clause - only exclude 13347 errors
-    validation_clause = f"SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT(b.{geom_col}, 0.5) NOT LIKE '%13347%'\n  AND "
-    
-    # Insert the validation before the SDO_WITHIN_DISTANCE clause
+
+    print('.......applying SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT filter (only TRUE geometries kept)')
+    print('.......Note: All invalid geometries will be excluded from the overlay')
+
+    # Validation predicate: only fully valid geometries
+    validation_clause = (
+        f"SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT(b.{geom_col}, 0.5) = 'TRUE'\n  AND "
+    )
+
+    # Insert validation before SDO_WITHIN_DISTANCE
     query = query.replace(
         'WHERE SDO_WITHIN_DISTANCE',
         f'WHERE {validation_clause}SDO_WITHIN_DISTANCE'
     )
-    
+
     return query
 
 
@@ -585,7 +584,7 @@ if __name__ == "__main__":
     #paths
     workspace = r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework"
     wksp_xls = os.path.join(workspace, 'input_spreadsheets')
-    aoi = os.path.join(workspace, 'test_data', 'aoi_test_3.shp')
+    aoi = os.path.join(workspace, 'test_data', 'aoi_test_1.shp')
     out_wksp = os.path.join(workspace, 'outputs')
     
     
@@ -600,7 +599,7 @@ if __name__ == "__main__":
     
     
     print ('\nReading User inputs: AOI.')
-    input_src = 'TANTALIS' # Possible values are "TANTALIS" and AOI
+    input_src = 'AOI' # Possible values are "TANTALIS" and AOI
 
     if input_src == 'AOI':
         print('....Reading the AOI file')
@@ -726,7 +725,7 @@ if __name__ == "__main__":
                     bvars_intr = {'wkb_aoi':wkb_aoi, 'srid':int(srid)}
                 
                 # Apply RECTIFY fix for problematic tables
-                query = apply_curve_fix(query, table, geom_col)
+                query = filter_invalid_oracle_geom(query, table, geom_col)
                 
                 df_all= read_query(connection,cursor,query,bvars_intr)
                 
