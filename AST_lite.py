@@ -85,22 +85,22 @@ def esri_to_gdf (aoi):
 
 def df_2_gdf(df, crs):
     """ Return a geopandas gdf based on a df with Geometry column, handling curve geometries"""
-    df = df.copy()
-    df['SHAPE'] = df['SHAPE'].astype(str)
+    
+    # Create a fresh DataFrame to avoid pandas metadata issues
+    df_clean = pd.DataFrame()
+    
+    # Copy SHAPE column as string
+    shape_series = df['SHAPE'].astype(str)
     
     def linearize_geometry(wkt_str):
         """Convert curve geometries to linear approximations"""
         from osgeo import ogr
         try:
-            # Create OGR geometry from WKT
             geom = ogr.CreateGeometryFromWkt(wkt_str)
             if geom is None:
                 return None
             
-            # GetLinearGeometry() converts curves to linear approximations
             linear_geom = geom.GetLinearGeometry()
-            
-            # Return as WKT that standard tools can handle
             return linear_geom.ExportToWkt()
         except Exception as e:
             print(f"Error processing geometry: {e}")
@@ -108,21 +108,25 @@ def df_2_gdf(df, crs):
     
     def process_geometry(wkt_str):
         """Only linearize if it contains curve geometry types"""
+        if wkt_str is None or not isinstance(wkt_str, str):
+            return None
         if any(curve_type in wkt_str.upper() for curve_type in ['CURVE', 'CIRCULARSTRING', 'COMPOUNDCURVE']):
             return linearize_geometry(wkt_str)
         return wkt_str
     
-    # Only process geometries that need linearization
-    df['processed_wkt'] = df['SHAPE'].apply(process_geometry)
+    # Process geometries using list comprehension (avoids pandas internal issues)
+    processed_wkts = [process_geometry(wkt) for wkt in shape_series]
+    
+    # Copy other columns from original dataframe
+    for col in df.columns:
+        if col != 'SHAPE':
+            df_clean[col] = df[col].values
     
     # Create geometries from the processed WKT
-    df['geometry'] = gpd.GeoSeries.from_wkt(df['processed_wkt'])
+    df_clean['geometry'] = gpd.GeoSeries.from_wkt(processed_wkts, crs=f"EPSG:{crs}")
     
     # Create GeoDataFrame
-    gdf = gpd.GeoDataFrame(df, geometry='geometry', crs=f"EPSG:{crs}")
-    
-    # Clean up temporary columns
-    gdf = gdf.drop(columns=['SHAPE', 'processed_wkt'])
+    gdf = gpd.GeoDataFrame(df_clean, geometry='geometry', crs=f"EPSG:{crs}")
     
     return gdf
 
@@ -607,7 +611,7 @@ if __name__ == "__main__":
     
     
     print ('\nReading User inputs: AOI.')
-    input_src = 'AOI' # Possible values are "TANTALIS" and AOI
+    input_src = 'TANTALIS' # Possible values are "TANTALIS" and AOI
 
     if input_src == 'AOI':
         print('....Reading the AOI file')
