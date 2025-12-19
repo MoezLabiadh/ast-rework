@@ -37,9 +37,9 @@ in_files = {
     'rto': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
     'rkb': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
     'rcb': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
-    #'rsk': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
-    #'rom': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
-    #'rno': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
+    'rsk': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
+    'rom': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
+    'rno': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
 }
 
 

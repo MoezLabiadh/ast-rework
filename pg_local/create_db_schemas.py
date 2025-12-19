@@ -52,7 +52,7 @@ version = cur.fetchone()
 print(f"PostGIS version: {version[0]}")
 
 # Create schemas for each region
-schemas = ['rwc', 'rsc', 'rto', 'rkb', 'rcb', 'rsk', 'rom', 'rno']
+schemas = ['west_coast', 'south_coast', 'thompson_okanagan', 'kootenay_boundary', 'cariboo', 'skeena', 'omineca', 'northeast']
 
 for schema in schemas:
     cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema};")
