@@ -4,9 +4,12 @@ import geopandas as gpd
 from sqlalchemy import create_engine
 from pathlib import Path
 import time
+import re
+
 
 # Start timing
 start_time = time.time()
+
 
 # Database connection parameters
 db_params = {
@@ -16,10 +19,12 @@ db_params = {
     'password': os.getenv('PG_LCL_SUSR_PASS')
 }
 
+
 # Create SQLAlchemy engine
 engine = create_engine(
     f"postgresql://{db_params['user']}:{db_params['password']}@{db_params['host']}/{db_params['database']}"
 )
+
 
 # Input files configuration
 in_loc = r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets'
@@ -29,30 +34,74 @@ in_files = {
     'rto': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
     'rkb': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
     'rcb': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
-    'rsk': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
-    'rom': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
-    'rno': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
+    #'rsk': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
+    #'rom': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
+    #'rno': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
 }
+
 
 # Track statistics
 loaded_datasets = []
 skipped_datasets = []
 errors = []
 
+
+def clean_path(path):
+    """Clean path from Excel hyperlink artifacts and extra whitespace"""
+    path = path.strip()
+    
+    # Remove hyperlink brackets and display text (e.g., [text](url) -> url)
+    # Pattern: [display_text](actual_url) -> actual_url
+    match = re.search(r'\]\((.*?)\)$', path)
+    if match:
+        path = match.group(1)
+    
+    # Remove leading/trailing brackets
+    path = path.strip('[]')
+    
+    # Remove extra whitespace and line breaks
+    path = ' '.join(path.split())
+    
+    return path
+
+
+def convert_to_mapped_drive(path):
+    """Convert UNC path to mapped drive"""
+    path = path.strip()
+    # Replace UNC path with mapped drive (case-insensitive)
+    path_lower = path.lower()
+    if path_lower.startswith(r'\\spatialfiles.bcgov\work'):
+        # Find the position after \work (case-insensitive)
+        idx = path_lower.find(r'work') + 4
+        path = 'W:' + path[idx:]
+    elif path_lower.startswith(r'\\spatialfiles.bcgov/work'):
+        # Find the position after /work (case-insensitive)
+        idx = path_lower.find(r'work') + 4
+        path = 'W:' + path[idx:]
+    return path
+
+
 def get_table_name(datasource):
-    """Extract table name from datasource path"""
+    """Extract table name from datasource path and truncate to 63 characters"""
     path = Path(datasource)
     
-    # For shapefiles, remove .shp extension
+    # For shapefiles, remove .shp extension (case-insensitive)
     if path.suffix.lower() == '.shp':
-        return path.stem.lower()
-    
+        table_name = path.stem.lower()
     # For GDB feature classes, get the last part (feature class name)
     # Format is usually: path/to/geodatabase.gdb/FeatureClassName
-    if '.gdb' in datasource:
-        return datasource.split('.gdb')[-1].strip('/\\').lower()
+    elif '.gdb' in datasource:
+        table_name = datasource.split('.gdb')[-1].strip('/\\').lower()
+    else:
+        table_name = path.stem.lower()
     
-    return path.stem.lower()
+    # Truncate to 63 characters (PostgreSQL identifier limit)
+    if len(table_name) > 63:
+        table_name = table_name[:63]
+        print(f"    Note: Table name truncated to 63 characters: {table_name}")
+    
+    return table_name
+
 
 def should_skip_dataset(datasource):
     """Check if dataset should be skipped based on name"""
@@ -70,13 +119,49 @@ def should_skip_dataset(datasource):
     
     return False
 
+
+def file_exists(datasource):
+    """Check if file or GDB exists (handles both shapefiles and featureclasses)"""
+    if '.gdb' in datasource:
+        # For GDB, only check if the GDB itself exists
+        parts = datasource.split('.gdb')
+        gdb_path = parts[0] + '.gdb'
+        return os.path.exists(gdb_path)
+    else:
+        # For shapefiles and other formats, check the full path
+        return os.path.exists(datasource)
+
+
+def read_spatial_data(datasource):
+    """Read spatial data from shp or GDB featureclass"""
+    try:
+        # Check for shapefile (case-insensitive)
+        if datasource.lower().endswith('.shp'):
+            gdf = gpd.read_file(datasource)
+        
+        elif '.gdb' in datasource:
+            # Split path to isolate GDB and featureclass name
+            parts = datasource.split('.gdb')
+            gdb = parts[0] + '.gdb'
+            fc = os.path.basename(datasource)
+            gdf = gpd.read_file(filename=gdb, layer=fc)
+        
+        else:
+            raise Exception(f'Format not recognized: {datasource}. Please provide a shp or featureclass (gdb)!')
+        
+        return gdf
+        
+    except Exception as e:
+        raise Exception(f'Error reading {datasource}: {str(e)}')
+
+
 def load_spatial_data(datasource, schema, table_name):
     """Load spatial data into PostGIS"""
     try:
         print(f"  Loading {datasource} into {schema}.{table_name}...")
         
-        # Read spatial data
-        gdf = gpd.read_file(datasource)
+        # Read spatial data (handles both shp and GDB featureclasses)
+        gdf = read_spatial_data(datasource)
         
         # Ensure geometry column is named 'geometry'
         if gdf.geometry.name != 'geometry':
@@ -103,6 +188,7 @@ def load_spatial_data(datasource, schema, table_name):
         print(f"    ✗ Error loading dataset: {str(e)}")
         return False
 
+
 # Process each region
 for schema, excel_file in in_files.items():
     print(f"\n{'='*60}")
@@ -127,32 +213,33 @@ for schema, excel_file in in_files.items():
         continue
     
     # Process each datasource
-    for idx, datasource in enumerate(df['Datasource'].dropna(), 1):
+    for datasource in df['Datasource'].dropna():
+        # Strip, clean, and convert datasource
         datasource = str(datasource).strip()
+        datasource = clean_path(datasource)
+        datasource = convert_to_mapped_drive(datasource)
         
-        # Skip if starts with WHSE or REG
+        # Skip if starts with WHSE or REG (don't print or track these)
         if should_skip_dataset(datasource):
-            print(f"{idx}. Skipping {datasource} (starts with WHSE or REG)")
-            skipped_datasets.append(f"{schema}: {datasource} (WHSE/REG)")
             continue
         
         # Check if already processed in THIS spreadsheet only
         if datasource in processed_in_spreadsheet:
-            print(f"{idx}. Skipping {datasource} (duplicate in same spreadsheet)")
+            print(f"Skipping {datasource} (duplicate in same spreadsheet)")
             skipped_datasets.append(f"{schema}: {datasource} (duplicate in spreadsheet)")
             continue
         
-        # Check if file exists
-        if not os.path.exists(datasource):
-            print(f"{idx}. Skipping {datasource} (file not found)")
+        # Check if file/GDB exists
+        if not file_exists(datasource):
+            print(f"Skipping {datasource} (file not found)")
             errors.append(f"{schema}: {datasource} (file not found)")
             continue
         
-        # Get table name
+        # Get table name (with truncation to 63 chars)
         table_name = get_table_name(datasource)
         
         # Load the data
-        print(f"{idx}. Processing: {os.path.basename(datasource)}")
+        print(f"Processing: {os.path.basename(datasource)}")
         success = load_spatial_data(datasource, schema, table_name)
         
         if success:
@@ -161,11 +248,13 @@ for schema, excel_file in in_files.items():
         else:
             errors.append(f"{schema}.{table_name}: Failed to load {datasource}")
 
+
 # Calculate processing time
 end_time = time.time()
 total_time = end_time - start_time
 hours, remainder = divmod(total_time, 3600)
 minutes, seconds = divmod(remainder, 60)
+
 
 # Print summary
 print(f"\n{'='*60}")
@@ -175,17 +264,19 @@ print(f"\nSuccessfully loaded: {len(loaded_datasets)} datasets")
 for dataset in loaded_datasets:
     print(f"  ✓ {dataset}")
 
+
 print(f"\nSkipped: {len(skipped_datasets)} datasets")
 for dataset in skipped_datasets:
     print(f"  - {dataset}")
+
 
 if errors:
     print(f"\nErrors: {len(errors)}")
     for error in errors:
         print(f"  ✗ {error}")
 
+
 print("\n" + "="*60)
 print(f"Processing Time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
-print(f"Total Time: {total_time:.2f} seconds")
 print("="*60)
 print("Loading complete!")
