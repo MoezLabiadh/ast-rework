@@ -98,6 +98,14 @@ def get_table_name(datasource):
     else:
         table_name = path.stem.lower()
     
+    # Sanitize table name: replace invalid characters with underscores
+    # PostgreSQL identifiers can only contain letters, digits, and underscores
+    table_name = re.sub(r'[^a-z0-9_]', '_', table_name)
+    
+    # Ensure it doesn't start with a digit
+    if table_name and table_name[0].isdigit():
+        table_name = 't_' + table_name
+    
     # Truncate to 50 characters (leaving room for index names like idx_{table}_geometry)
     # PostgreSQL identifier limit is 63, and idx_ + _geometry = 13 characters
     if len(table_name) > 50:
