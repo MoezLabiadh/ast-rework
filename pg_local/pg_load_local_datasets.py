@@ -32,14 +32,14 @@ engine = create_engine(
 # Input files configuration
 in_loc = r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets'
 in_files = {
-    'rwc': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
-    'rsc': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
-    'rto': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
-    'rkb': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
-    'rcb': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
-    'rsk': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
-    'rom': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
-    'rno': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
+    'west_coast': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
+    'south_coast': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
+    'thompson_okanagan': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
+    'kootenay_boundary': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
+    'cariboo': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
+    'skeena': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
+    'omineca': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
+    'northeast': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
 }
 
 
