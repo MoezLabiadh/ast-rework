@@ -1,5 +1,13 @@
 '''
 Script to load AST local datasets into the PG  database.
+
+Reads regional Excel spreadsheets, loads spatial datasets (shapefiles/GDB feature classes)
+into schema-separated tables, reprojects to BC Albers (EPSG:3005), creates spatial
+indexes, and handles path conversion, name sanitization, and duplicate detection.
+
+Author: Moez Labiadh, GeoBC
+Date: December 2025
+
 '''
 import os
 from pathlib import Path
@@ -92,9 +100,14 @@ def get_table_name(datasource):
     if path.suffix.lower() == '.shp':
         table_name = path.stem.lower()
     # For GDB feature classes, get the last part (feature class name)
-    # Format is usually: path/to/geodatabase.gdb/FeatureClassName
+    # Format is usually: path/to/geodatabase.gdb/FeatureClassName or path/to/geodatabase.gdb/FeatureDataset/FeatureClassName
     elif '.gdb' in datasource:
-        table_name = datasource.split('.gdb')[-1].strip('/\\').lower()
+        # Split on .gdb and get everything after it
+        after_gdb = datasource.split('.gdb')[-1]
+        # Remove leading/trailing slashes and backslashes, then get the last part
+        after_gdb = after_gdb.strip('/\\')
+        # If there's a feature dataset, get only the feature class name (last part)
+        table_name = after_gdb.split('\\')[-1].split('/')[-1].lower()
     else:
         table_name = path.stem.lower()
     
