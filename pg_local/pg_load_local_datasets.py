@@ -98,7 +98,7 @@ def get_table_name(datasource):
     
     # For shapefiles, remove .shp extension (case-insensitive)
     if path.suffix.lower() == '.shp':
-        table_name = path.stem.lower()
+        table_name = path.stem
     # For GDB feature classes, get the last part (feature class name)
     # Format is usually: path/to/geodatabase.gdb/FeatureClassName or path/to/geodatabase.gdb/FeatureDataset/FeatureClassName
     elif '.gdb' in datasource:
@@ -107,24 +107,32 @@ def get_table_name(datasource):
         # Remove leading/trailing slashes and backslashes, then get the last part
         after_gdb = after_gdb.strip('/\\')
         # If there's a feature dataset, get only the feature class name (last part)
-        table_name = after_gdb.split('\\')[-1].split('/')[-1].lower()
+        table_name = after_gdb.split('\\')[-1].split('/')[-1]
     else:
-        table_name = path.stem.lower()
+        table_name = path.stem
+    
+    # Convert to lowercase first
+    table_name = table_name.lower()
     
     # Sanitize table name: replace invalid characters with underscores
     # PostgreSQL identifiers can only contain letters, digits, and underscores
     table_name = re.sub(r'[^a-z0-9_]', '_', table_name)
     
+    # Remove consecutive underscores
+    table_name = re.sub(r'_+', '_', table_name)
+    
+    # Remove leading/trailing underscores
+    table_name = table_name.strip('_')
+    
     # Ensure it doesn't start with a digit
     if table_name and table_name[0].isdigit():
         table_name = 't_' + table_name
     
-    # Truncate to 50 characters (leaving room for index names like idx_{table}_geometry)
-    # PostgreSQL identifier limit is 63, and idx_ + _geometry = 13 characters
+    # Truncate to 50 characters (leaving room for index names like sidx_{table}_geom)
     if len(table_name) > 50:
-        original_name = table_name
-        table_name = table_name[:50]
-        print(f"    Note: Table name truncated from {len(original_name)} to 50 characters")
+        original_length = len(table_name)
+        table_name = table_name[:50].rstrip('_')  # Remove trailing underscore after truncation
+        print(f"    Note: Table name truncated from {original_length} to {len(table_name)} characters")
     
     return table_name
 
