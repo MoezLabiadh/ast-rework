@@ -2,10 +2,10 @@
 Script to load AST local datasets into the PG  database.
 '''
 import os
+from pathlib import Path
 import pandas as pd
 import geopandas as gpd
-from sqlalchemy import create_engine
-from pathlib import Path
+from sqlalchemy import create_engine, text
 import time
 import re
 
@@ -85,7 +85,7 @@ def convert_to_mapped_drive(path):
 
 
 def get_table_name(datasource):
-    """Extract table name from datasource path and truncate to 63 characters"""
+    """Extract table name from datasource path and truncate to 50 characters (to allow for index names)"""
     path = Path(datasource)
     
     # For shapefiles, remove .shp extension (case-insensitive)
@@ -98,10 +98,12 @@ def get_table_name(datasource):
     else:
         table_name = path.stem.lower()
     
-    # Truncate to 63 characters (PostgreSQL identifier limit)
-    if len(table_name) > 63:
-        table_name = table_name[:63]
-        print(f"    Note: Table name truncated to 63 characters: {table_name}")
+    # Truncate to 50 characters (leaving room for index names like idx_{table}_geometry)
+    # PostgreSQL identifier limit is 63, and idx_ + _geometry = 13 characters
+    if len(table_name) > 50:
+        original_name = table_name
+        table_name = table_name[:50]
+        print(f"    Note: Table name truncated from {len(original_name)} to 50 characters")
     
     return table_name
 
@@ -184,7 +186,14 @@ def load_spatial_data(datasource, schema, table_name):
             index=False
         )
         
-        print(f"    ✓ Successfully loaded {len(gdf)} features")
+        # Create spatial index
+        with engine.connect() as conn:
+            index_name = f"sidx_{table_name}_geom"[:63]  # Truncate index name if needed
+            sql = text(f'CREATE INDEX IF NOT EXISTS {index_name} ON {schema}.{table_name} USING GIST (geometry);')
+            conn.execute(sql)
+            conn.commit()
+        
+        print(f"    ✓ Successfully loaded {len(gdf)} features with spatial index")
         return True
         
     except Exception as e:
