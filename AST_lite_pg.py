@@ -1,32 +1,3 @@
-"""
-Name:        Automatic Status Tool - LITE version! DRAFT
-
-Purpose:     This script checks for overlaps between an AOI and datasets
-             specified in the AST datasets spreadsheets (common and region specific). 
-             
-Notes        The script supports AOIs in TANTALIS Crown Tenure spatial view 
-             and User defined AOIs (shp, featureclass).
-               
-             The script generates a spreadhseet of conflicts and 
-             Interactive HTML maps showing the AOI and ovelappng features
-
-             This version uses PostGIS to process local datasets instead of Geopandas
-                             
-Arguments:   - Output location (workspace)
-             - BCGW username
-             - BCGW password
-             - Region (west coast, skeena...)
-             - AOI: - ESRI shp or featureclass OR
-                    - File number
-                    - Disposition ID
-                    - Parcel ID
-                
-Author:      Moez Labiadh - GeoBC
-
-Created:     2025-12-23
-Updated:     2025-12-23
-"""
-
 import warnings
 warnings.simplefilter(action='ignore')
 
@@ -307,6 +278,32 @@ def filter_invalid_oracle_geom(query, table_name, geom_col):
 
 
 
+def apply_coordinate_transform(query, geom_col, srid_t):
+    """Apply coordinate transformation to Oracle spatial query when SRIDs don't match"""
+    
+    print(f'.......Applying coordinate transformation (table SRID: {srid_t})')
+    
+    # Pattern 1: In SDO_GEOM.SDO_DISTANCE
+    query = query.replace(
+        f'SDO_GEOMETRY(:wkb_aoi, :srid), 0.5)',
+        f'SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t), 0.5)'
+    )
+    
+    # Pattern 2: In SDO_WITHIN_DISTANCE
+    query = query.replace(
+        f'SDO_GEOMETRY(:wkb_aoi, :srid),',
+        f'SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t),'
+    )
+    
+    # Pattern 3: In the SELECT - transform output geometry
+    query = query.replace(
+        f'SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE',
+        f'SDO_UTIL.TO_WKTGEOMETRY(SDO_CS.TRANSFORM({geom_col}, :srid_t, :srid)) SHAPE'
+    )
+    
+    return query
+
+
 def load_queries():
     """Load SQL queries for Oracle and PostGIS"""
     sql = {}
@@ -334,7 +331,7 @@ def load_queries():
                     WHERE rownum = 1
                    """
                                  
-    sql['overlay_wkb'] = """
+    sql['oracle_overlay'] = """
                     SELECT {cols},
                            CASE WHEN SDO_GEOM.SDO_DISTANCE({geom_col}, SDO_GEOMETRY(:wkb_aoi, :srid), 0.5) = 0 
                             THEN 'INTERSECT' 
@@ -346,20 +343,6 @@ def load_queries():
                                                SDO_GEOMETRY(:wkb_aoi, :srid),'distance = {radius}') = 'TRUE'
                         {def_query}   
                                   """ 
-    
-    sql['overlay_wkb_transform'] = """
-                    SELECT {cols},
-                           CASE WHEN SDO_GEOM.SDO_DISTANCE({geom_col}, 
-                                    SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t), 0.5) = 0 
-                            THEN 'INTERSECT' 
-                             ELSE 'Within ' || TO_CHAR({radius}) || ' m'
-                              END AS RESULT,
-                           SDO_UTIL.TO_WKTGEOMETRY(SDO_CS.TRANSFORM({geom_col}, :srid_t, :srid)) SHAPE
-                    FROM {tab}
-                    WHERE SDO_WITHIN_DISTANCE ({geom_col}, 
-                                SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t),'distance = {radius}') = 'TRUE'
-                        {def_query}   
-                    """
     
     # PostGIS queries
     sql['postgis_overlay'] = """
@@ -758,26 +741,25 @@ if __name__ == "__main__":
                 if missing_cols:
                     failed_datasets.append({'item': item, 'reason': f'Missing columns: {", ".join(missing_cols)}'})
                 
-                # NO b. prefix needed - columns come clean from database
+                # Build the base query
+                query = sql['oracle_overlay'].format(
+                    cols=validated_cols, tab=table, radius=radius,
+                    geom_col=geom_col, def_query=def_query)
                 
+                # Check if coordinate transformation is needed
                 srid_mismatch = (srid_t == 1000003005)
                 
                 if srid_mismatch:
-                    print(f'.......SRID mismatch detected (table SRID: {srid_t}), using transform query')
-                    query = sql['overlay_wkb_transform'].format(
-                        cols=validated_cols, tab=table, radius=radius,
-                        geom_col=geom_col, def_query=def_query)
+                    query = apply_coordinate_transform(query, geom_col, srid_t)
                     cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
                     bvars_intr = {'wkb_aoi': wkb_aoi, 'srid': int(srid), 'srid_t': int(srid_t)}
                 else:
-                    query = sql['overlay_wkb'].format(
-                        cols=validated_cols, tab=table, radius=radius,
-                        geom_col=geom_col, def_query=def_query)
                     cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
                     bvars_intr = {'wkb_aoi': wkb_aoi, 'srid': int(srid)}
                 
+                # Apply geometry validation filter if needed
                 query = filter_invalid_oracle_geom(query, table, geom_col)
-
+                
                 df_all = read_query(connection, cursor, query, bvars_intr)
                     
             else:
@@ -878,7 +860,7 @@ if __name__ == "__main__":
             print('.....number of overlaps: {}'.format(ov_nbr))
             
             results[item] = df_all_res
-
+    
             if ov_nbr > 0:
                 print('.....generating a map.')
                 gdf_intr = df_2_gdf(df_all, 3005)
@@ -895,7 +877,7 @@ if __name__ == "__main__":
                 
                 gdf_intr_s = simplify_geometries(gdf_intr, tol=10, preserve_topology=True)
                 make_status_map(gdf_aoi, gdf_intr_s, col_lbl, item, out_wksp)
-
+ 
         except Exception as e:
             print(f'.......ERROR processing dataset {item}: {e}')
             failed_datasets.append({'item': item, 'reason': str(e)})
