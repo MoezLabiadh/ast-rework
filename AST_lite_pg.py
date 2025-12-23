@@ -1,3 +1,32 @@
+"""
+Name:        Automatic Status Tool - LITE version! DRAFT
+
+Purpose:     This script checks for overlaps between an AOI and datasets
+             specified in the AST datasets spreadsheets (common and region specific). 
+             
+Notes        The script supports AOIs in TANTALIS Crown Tenure spatial view 
+             and User defined AOIs (shp, featureclass).
+               
+             The script generates a spreadhseet of conflicts and 
+             Interactive HTML maps showing the AOI and ovelappng features
+
+             This version uses PostGIS to process local datasets instead of Geopandas
+                             
+Arguments:   - Output location (workspace)
+             - BCGW username
+             - BCGW password
+             - Region (west coast, skeena...)
+             - AOI: - ESRI shp or featureclass OR
+                    - File number
+                    - Disposition ID
+                    - Parcel ID
+                
+Author:      Moez Labiadh - GeoBC
+
+Created:     2025-12-23
+Updated:     2025-12-23
+"""
+
 import warnings
 warnings.simplefilter(action='ignore')
 
