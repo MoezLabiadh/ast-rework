@@ -143,7 +143,7 @@ def df_2_gdf(df, crs):
     
     df_clean['geometry'] = gpd.GeoSeries.from_wkt(processed_wkts, crs=f"EPSG:{crs}")
     gdf = gpd.GeoDataFrame(df_clean, geometry='geometry', crs=f"EPSG:{crs}")
-    
+
     return gdf
 
 
@@ -222,27 +222,25 @@ def get_table_cols(item_index, df_stat):
     df_stat_item = df_stat.loc[[item_index]]
     df_stat_item.fillna(value='nan', inplace=True)
 
-
     table = df_stat_item['Datasource'].iloc[0].strip()
     
     fields = []
-    fields.append(str(df_stat_item['Fields_to_Summarize'].iloc[0].strip()))
-
+    
+    # Collect all Fields_to_Summarize columns
+    first_field = str(df_stat_item['Fields_to_Summarize'].iloc[0].strip())
+    if first_field != 'nan':
+        fields.append(first_field)
 
     for f in range(2, 7):
         for i in df_stat_item['Fields_to_Summarize' + str(f)].tolist():
             if i != 'nan':
                 fields.append(str(i.strip()))
 
-
+    # Add map_label_field if it exists and isn't already in the list
     col_lbl = df_stat_item['map_label_field'].iloc[0].strip()
     
     if col_lbl != 'nan' and col_lbl not in fields:
         fields.append(col_lbl)
-    
-    # Clean up fields list
-    if fields[0] == 'nan':
-        fields = []
     
     # Return as comma-separated string for consistency
     if fields:
@@ -290,25 +288,20 @@ def filter_invalid_oracle_geom(query, table_name, geom_col):
         'WHSE_CADASTRE.PMBC_PARCEL_FABRIC_POLY_SVW'
     ]
 
-
     if table_name not in PROBLEMATIC_TABLES:
         return query
 
-
     print('.......applying SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT filter (only TRUE geometries kept)')
     print('.......Note: All invalid geometries will be excluded from the overlay')
-
 
     validation_clause = (
         f"SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT({geom_col}, 0.5) = 'TRUE'\n  AND "
     )
 
-
     query = query.replace(
         'WHERE SDO_WITHIN_DISTANCE',
         f'WHERE {validation_clause}SDO_WITHIN_DISTANCE'
     )
-
 
     return query
 
@@ -488,14 +481,23 @@ def validate_columns(cols, available_cols, item, table):
         if col not in available_cols and col != 'OBJECTID':
             missing_cols.append(col)
     
-    # If all columns are missing, fall back to first available column or OBJECTID
+    # If all columns are missing, fall back logic
     if len(missing_cols) == len(requested) or not requested:
-        if available_cols:
-            print(f'.......WARNING: No valid requested columns, using {available_cols[0]}')
-            return available_cols[0], missing_cols
-        else:
-            print(f'.......WARNING: No columns available, using OBJECTID')
+        # First, try to find OBJECTID
+        if 'OBJECTID' in available_cols:
+            print(f'.......WARNING: No valid requested columns, using OBJECTID')
             return 'OBJECTID', missing_cols
+        
+        # If OBJECTID doesn't exist, use first available column (excluding SHAPE/GEOMETRY)
+        excluded_cols = ['SHAPE', 'GEOMETRY', 'shape', 'geometry']
+        valid_available = [col for col in available_cols if col not in excluded_cols]
+        
+        if valid_available:
+            print(f'.......WARNING: No valid requested columns and no OBJECTID, using {valid_available[0]}')
+            return valid_available[0], missing_cols
+        else:
+            print(f'.......WARNING: No valid columns available')
+            return 'OBJECTID', missing_cols  # Last resort fallback
     
     # Remove missing columns from the list
     valid_cols = [c for c in requested if c not in missing_cols]
@@ -653,7 +655,7 @@ if __name__ == "__main__":
     sql = load_queries()
     
     print('\nReading User inputs: AOI.')
-    input_src = 'TANTALIS'  # Possible values are "TANTALIS" and AOI
+    input_src = 'AOI'  # Possible values are "TANTALIS" and AOI
 
 
     if input_src == 'AOI':
@@ -714,7 +716,7 @@ if __name__ == "__main__":
         try:
             print('.....getting table and column names')
             table, cols, col_lbl = get_table_cols(item_index, df_stat)
-            
+
             print('.....getting definition query (if any)')
             def_query = get_def_query(item_index, df_stat, for_postgis=False)
         
@@ -723,7 +725,7 @@ if __name__ == "__main__":
             
             # This will hold the final validated columns
             validated_cols = cols
-             
+
             print('.....running Overlay Analysis.')
             
             if table.startswith('WHSE') or table.startswith('REG'): 
@@ -775,6 +777,7 @@ if __name__ == "__main__":
                     bvars_intr = {'wkb_aoi': wkb_aoi, 'srid': int(srid)}
                 
                 query = filter_invalid_oracle_geom(query, table, geom_col)
+
                 df_all = read_query(connection, cursor, query, bvars_intr)
                     
             else:
@@ -796,7 +799,7 @@ if __name__ == "__main__":
                         results[item] = pd.DataFrame([])
                         counter += 1
                         continue
-                    
+
                     validated_cols, missing_cols = validate_columns(cols, available_cols, item, table_name)
                     
                     if missing_cols:
@@ -815,7 +818,7 @@ if __name__ == "__main__":
                         table=table_name,
                         def_query=pg_def_query
                     )
-                
+
                     # Execute PostGIS query
                     # Parameters: wkb_aoi, srid, radius_str, wkb_aoi, srid, radius
                     pg_cursor.execute(query, (
