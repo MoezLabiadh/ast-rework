@@ -1,6 +1,13 @@
 '''
 Script to create a PG database with PostGIS extension and multiple schemas.
+
 Each schema will hold data for a specific region.
+
+Also creates the metadata table for tracking dataset load times.
+
+Author: Moez Labiadh, GeoBC
+
+Date: December 2025
 '''
 import os
 import psycopg2
@@ -52,13 +59,47 @@ version = cur.fetchone()
 print(f"PostGIS version: {version[0]}")
 
 # Create schemas for each region
-schemas = ['west_coast', 'south_coast', 'thompson_okanagan', 'kootenay_boundary', 'cariboo', 'skeena', 'omineca', 'northeast']
+schemas = [
+    'west_coast', 'south_coast', 'thompson_okanagan', 
+    'kootenay_boundary', 'cariboo', 'skeena', 'omineca', 'northeast'
+]
 
 for schema in schemas:
     cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema};")
     print(f"Schema '{schema}' created!")
 
 conn.commit()
+
+# Create metadata table for tracking dataset loads
+print("\nCreating metadata table...")
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS public.dataset_metadata (
+        schema_name VARCHAR(100),
+        table_name VARCHAR(100),
+        datasource VARCHAR(1000),
+        last_modified TIMESTAMP,
+        last_loaded TIMESTAMP,
+        feature_count INTEGER,
+        PRIMARY KEY (schema_name, table_name)
+    );
+""")
+
+# Create indexes for better query performance
+cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_metadata_schema 
+        ON public.dataset_metadata(schema_name);
+""")
+
+cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_metadata_last_modified 
+        ON public.dataset_metadata(last_modified);
+""")
+
+conn.commit()
+
+print("✓ Metadata table created successfully")
+print("  - Table: public.dataset_metadata")
+print("  - Indexes: schema_name, last_modified")
 
 # List all schemas to verify
 cur.execute("""
@@ -72,7 +113,20 @@ print("\nAll schemas in database:")
 for schema in all_schemas:
     print(f"  - {schema[0]}")
 
+# List all tables in public schema
+cur.execute("""
+    SELECT tablename 
+    FROM pg_tables 
+    WHERE schemaname = 'public'
+    ORDER BY tablename;
+""")
+all_tables = cur.fetchall()
+print("\nTables in public schema:")
+for table in all_tables:
+    print(f"  - {table[0]}")
+
 cur.close()
 conn.close()
 
 print("\nDatabase setup complete!")
+print("You can now run the AST dataset loader script.")
