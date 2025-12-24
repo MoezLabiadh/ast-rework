@@ -41,13 +41,13 @@ engine = create_engine(
 in_loc = r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets'
 in_files = {
     'west_coast': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
-    'south_coast': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
-    'thompson_okanagan': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
-    'kootenay_boundary': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
-    'cariboo': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
-    'skeena': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
-    'omineca': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
-    'northeast': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
+    #'south_coast': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
+    #'thompson_okanagan': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
+    #'kootenay_boundary': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
+    #'cariboo': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
+    #'skeena': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
+    #'omineca': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
+    #'northeast': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
 }
 
 
@@ -171,22 +171,34 @@ def read_spatial_data(datasource):
     try:
         # Check for shapefile (case-insensitive)
         if datasource.lower().endswith('.shp'):
-            gdf = gpd.read_file(datasource)
-        
+            try:
+                # Try with default pyogrio engine first
+                gdf = gpd.read_file(datasource)
+            except Exception as e:
+                print(f"Warning: pyogrio failed ({str(e)}). Attempting with fiona...")
+                # Fallback to fiona engine
+                gdf = gpd.read_file(datasource, engine='fiona')
+                
         elif '.gdb' in datasource:
             # Split path to isolate GDB and featureclass name
             parts = datasource.split('.gdb')
             gdb = parts[0] + '.gdb'
             fc = os.path.basename(datasource)
-            gdf = gpd.read_file(filename=gdb, layer=fc)
-        
+            
+            try:
+                # Try with default pyogrio engine first
+                gdf = gpd.read_file(filename=gdb, layer=fc)
+            except Exception as e:
+                print(f"Warning: pyogrio failed ({str(e)}). Attempting with fiona...")
+                # Fallback to fiona engine
+                gdf = gpd.read_file(filename=gdb, layer=fc, engine='fiona')
         else:
             raise Exception(f'Format not recognized: {datasource}. Please provide a shp or featureclass (gdb)!')
         
         return gdf
         
     except Exception as e:
-        raise Exception(f'Error reading {datasource}: {str(e)}')
+        raise Exception(f"Failed to read {datasource}: {str(e)}")
 
 
 def load_spatial_data(datasource, schema, table_name):
