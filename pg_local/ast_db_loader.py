@@ -311,6 +311,9 @@ def load_spatial_data(datasource, schema, table_name, file_modified_date):
         # Read spatial data
         gdf = read_spatial_data(datasource)
 
+        # Make all column names lowercase
+        gdf.columns = gdf.columns.str.lower()
+
         # Ensure geometry column is named 'geometry'
         if gdf.geometry.name != 'geometry':
             gdf = gdf.rename_geometry('geometry')
