@@ -24,7 +24,7 @@ Arguments:   - Output location (workspace)
 Author:      Moez Labiadh - GeoBC
 
 Created:     2025-12-23
-Updated:     2025-12-23
+Updated:     2025-12-30
 """
 
 import warnings
@@ -217,6 +217,7 @@ def read_input_spreadsheets(wksp_xls, region):
 
 
 
+
 def get_table_cols(item_index, df_stat):
     """Returns table and field names from the AST datasets spreadsheet"""
     df_stat_item = df_stat.loc[[item_index]]
@@ -380,8 +381,8 @@ def load_queries():
                                WHEN ST_Intersects(geometry, ST_GeomFromWKB(%s, %s)) 
                                THEN 'INTERSECT'
                                ELSE 'Within ' || %s || ' m'
-                           END AS RESULT,
-                           ST_AsText(geometry) AS SHAPE
+                           END AS result,
+                           ST_AsText(geometry) AS shape
                     FROM {schema}.{table}
                     WHERE ST_DWithin(geometry, ST_GeomFromWKB(%s, %s), %s)
                     {def_query}
@@ -468,17 +469,16 @@ def get_postgis_columns(pg_connection, pg_cursor, schema, table):
         return []
 
 
-def quote_postgres_columns(cols_str):
-    """Add double quotes around PostgreSQL column names to preserve case"""
+def convert_columns_to_lowercase(cols_str):
+    """Convert comma-separated column names to lowercase for PostGIS"""
     if not cols_str or cols_str == '':
         return ''
     
-    cols_list = [c.strip() for c in cols_str.split(',')]
-    quoted_cols = [f'"{col}"' for col in cols_list]
-    return ', '.join(quoted_cols)
+    cols_list = [c.strip().lower() for c in cols_str.split(',')]
+    return ','.join(cols_list)
 
 
-def validate_columns(cols, available_cols, item, table):
+def validate_columns(cols, available_cols, item, table, is_postgis=False):
     """Validates that requested columns exist in the dataset"""
     missing_cols = []
     
@@ -488,28 +488,35 @@ def validate_columns(cols, available_cols, item, table):
     else:
         requested = []
     
+    # For PostGIS, convert to lowercase for comparison
+    if is_postgis:
+        requested = [c.lower() for c in requested]
+        available_cols = [c.lower() for c in available_cols]
+    
     # Check which columns are missing
     for col in requested:
-        if col not in available_cols and col != 'OBJECTID':
+        col_to_check = col.lower() if is_postgis else col
+        if col_to_check not in available_cols and col_to_check != 'objectid':
             missing_cols.append(col)
     
     # If all columns are missing, fall back logic
     if len(missing_cols) == len(requested) or not requested:
-        # First, try to find OBJECTID
-        if 'OBJECTID' in available_cols:
-            print(f'.......WARNING: No valid requested columns, using OBJECTID')
-            return 'OBJECTID', missing_cols
+        # First, try to find OBJECTID/objectid
+        objectid_col = 'objectid' if is_postgis else 'OBJECTID'
+        if objectid_col in available_cols:
+            print(f'.......WARNING: No valid requested columns, using {objectid_col}')
+            return objectid_col, missing_cols
         
-        # If OBJECTID doesn't exist, use first available column (excluding SHAPE/GEOMETRY)
-        excluded_cols = ['SHAPE', 'GEOMETRY', 'shape', 'geometry']
+        # If OBJECTID doesn't exist, use first available column (excluding geometry columns)
+        excluded_cols = ['shape', 'geometry'] if is_postgis else ['SHAPE', 'GEOMETRY']
         valid_available = [col for col in available_cols if col not in excluded_cols]
         
         if valid_available:
-            print(f'.......WARNING: No valid requested columns and no OBJECTID, using {valid_available[0]}')
+            print(f'.......WARNING: No valid requested columns and no {objectid_col}, using {valid_available[0]}')
             return valid_available[0], missing_cols
         else:
             print(f'.......WARNING: No valid columns available')
-            return 'OBJECTID', missing_cols  # Last resort fallback
+            return objectid_col, missing_cols
     
     # Remove missing columns from the list
     valid_cols = [c for c in requested if c not in missing_cols]
@@ -518,7 +525,7 @@ def validate_columns(cols, available_cols, item, table):
         print(f'.......WARNING: Missing columns in {table}: {", ".join(missing_cols)}')
     
     # Return as comma-separated string
-    validated = ','.join(valid_cols) if valid_cols else 'OBJECTID'
+    validated = ','.join(valid_cols) if valid_cols else ('objectid' if is_postgis else 'OBJECTID')
     
     return validated, missing_cols
 
@@ -655,7 +662,7 @@ if __name__ == "__main__":
     connection, cursor = connect_to_Oracle(bcgw_user, bcgw_pwd, hostname)
     
     # PostGIS connection
-    print('Connecting to PostGIS.')
+    print('\nConnecting to PostGIS.')
     pg_host = 'localhost'
     pg_database = 'ast_local_datasets'
     pg_user = 'postgres'
@@ -667,7 +674,7 @@ if __name__ == "__main__":
     sql = load_queries()
     
     print('\nReading User inputs: AOI.')
-    input_src = 'AOI'  # Possible values are "TANTALIS" and AOI
+    input_src = 'AOI'  ####### USER INPUT ####### Possible values are "TANTALIS" and AOI
 
 
     if input_src == 'AOI':
@@ -708,7 +715,7 @@ if __name__ == "__main__":
     wkb_aoi, srid = get_wkb_srid(gdf_aoi)
     
     print('\nReading the AST datasets spreadsheet.')
-    region = 'west_coast'
+    region = 'west_coast'   ####### USER INPUT ####### Possible values are west_coast, skeena, cariboo, thompson_okanagan, kootenay, peace_river, northeast
     print('....Region is {}'.format(region))
     df_stat = read_input_spreadsheets(wksp_xls, region)
     
@@ -811,27 +818,28 @@ if __name__ == "__main__":
                         counter += 1
                         continue
 
-                    validated_cols, missing_cols = validate_columns(cols, available_cols, item, table_name)
+                    # Convert requested columns to lowercase for PostGIS
+                    cols_lowercase = convert_columns_to_lowercase(cols)
+                    col_lbl_lowercase = col_lbl.lower() if col_lbl != 'nan' else 'nan'
+                    
+                    # Validate with lowercase columns
+                    validated_cols, missing_cols = validate_columns(cols_lowercase, available_cols, item, table_name, is_postgis=True)
                     
                     if missing_cols:
                         failed_datasets.append({'item': item, 'reason': f'Missing columns: {", ".join(missing_cols)}'})
                     
-                    # IMPORTANT: Quote column names for PostgreSQL
-                    quoted_cols = quote_postgres_columns(validated_cols)
-                    
-                    # Get definition query for PostGIS
+                    # Get definition query for PostGIS (already handles lowercase)
                     pg_def_query = get_def_query(item_index, df_stat, for_postgis=True)
                     
-                    # Build PostGIS overlay query using QUOTED columns
+                    # Build PostGIS overlay query - no quotes needed, all lowercase
                     query = sql['postgis_overlay'].format(
-                        cols=quoted_cols,  # Changed from validated_cols to quoted_cols
+                        cols=validated_cols,  # Already lowercase
                         schema=schema,
                         table=table_name,
                         def_query=pg_def_query
                     )
 
                     # Execute PostGIS query
-                    # Parameters: wkb_aoi, srid, radius_str, wkb_aoi, srid, radius
                     pg_cursor.execute(query, (
                         psycopg2.Binary(wkb_aoi), 
                         int(srid), 
@@ -858,23 +866,25 @@ if __name__ == "__main__":
                     results[item] = pd.DataFrame([])
                     counter += 1
                     continue
-            
+
             # Process results (common for both Oracle and PostGIS)
             if isinstance(validated_cols, str):
                 cols_list = [c.strip() for c in validated_cols.split(",")]
             else:
                 cols_list = validated_cols
 
-            # Handle RESULT column case sensitivity
-            # Oracle returns uppercase, PostGIS returns lowercase
-            if 'RESULT' in df_all.columns:
-                cols_list.append('RESULT')
-            elif 'result' in df_all.columns:
-                cols_list.append('result')
+            # Handle result column - lowercase for PostGIS, uppercase for Oracle
+            if table.startswith('WHSE') or table.startswith('REG'):
+                result_col = 'RESULT'
             else:
-                print(f'.......WARNING: Neither RESULT nor result column found in results')
+                result_col = 'result'
 
-            # Build the final column list, checking each column exists
+            if result_col in df_all.columns:
+                cols_list.append(result_col)
+            else:
+                print(f'.......WARNING: {result_col} column not found in results')
+
+            # Build the final column list
             available_result_cols = [col for col in cols_list if col in df_all.columns]
 
             if not available_result_cols:
@@ -884,29 +894,32 @@ if __name__ == "__main__":
                 continue
 
             df_all_res = df_all[available_result_cols] 
-            
+
             ov_nbr = df_all_res.shape[0]
             print('.....number of overlaps: {}'.format(ov_nbr))
-            
+
             results[item] = df_all_res
-    
+
             if ov_nbr > 0:
                 print('.....generating a map.')
                 gdf_intr = df_2_gdf(df_all, 3005)
                 
+                # Use lowercase col_lbl for PostGIS
                 if col_lbl == 'nan': 
-                    col_lbl = cols_list[0]
-                    gdf_intr[col_lbl] = gdf_intr[col_lbl].astype(str)
+                    col_lbl_to_use = cols_list[0]
+                else:
+                    col_lbl_to_use = col_lbl_lowercase if not (table.startswith('WHSE') or table.startswith('REG')) else col_lbl
+                
+                if col_lbl_to_use in gdf_intr.columns:
+                    gdf_intr[col_lbl_to_use] = gdf_intr[col_lbl_to_use].astype(str)
                 
                 for col in gdf_intr.columns:
                     if gdf_intr[col].dtype == 'datetime64[ns]':
                         gdf_intr[col] = gdf_intr[col].astype(str)
                 
-                gdf_intr[col_lbl] = gdf_intr[col_lbl].astype(str) 
-                
                 gdf_intr_s = simplify_geometries(gdf_intr, tol=10, preserve_topology=True)
-                make_status_map(gdf_aoi, gdf_intr_s, col_lbl, item, out_wksp)
- 
+                make_status_map(gdf_aoi, gdf_intr_s, col_lbl_to_use, item, out_wksp)
+
         except Exception as e:
             print(f'.......ERROR processing dataset {item}: {e}')
             failed_datasets.append({'item': item, 'reason': str(e)})
