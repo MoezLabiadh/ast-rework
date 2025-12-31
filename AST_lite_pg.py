@@ -580,13 +580,11 @@ def make_status_map(gdf_aoi, gdf_intr, col_lbl, item, workspace):
     xmin, ymin, xmax, ymax = gdf_aoi.to_crs(4326)['geometry'].total_bounds
     m.fit_bounds([[ymin, xmin], [ymax, xmax]])
 
-
     gdf_aoi.explore(
          m=m,
          tooltip=False,
          style_kwds=dict(fill=False, color="red", weight=3),
          name="AOI")
-
 
     gdf_intr.explore(
          m=m,
@@ -597,7 +595,15 @@ def make_status_map(gdf_aoi, gdf_intr, col_lbl, item, workspace):
          style_kwds=dict(color="gray"),
          name=item)
     
-    folium.TileLayer('stamenterrain', control=True).add_to(m)
+    # Add Google Satellite basemap
+    folium.TileLayer(
+        tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+        attr='Google',
+        name='Google Satellite',
+        overlay=False,
+        control=True
+    ).add_to(m)
+    
     folium.LayerControl().add_to(m)
     
     maps_dir = os.path.join(workspace, 'maps')
@@ -957,7 +963,7 @@ if __name__ == "__main__":
             print('.....number of overlaps: {}'.format(ov_nbr))
 
             results[item] = df_all_res
-            '''
+
             if ov_nbr > 0:
                 print('.....generating a map.')
                 gdf_intr = df_2_gdf(df_all, 3005)
@@ -982,7 +988,7 @@ if __name__ == "__main__":
                 
                 gdf_intr_s = simplify_geometries(gdf_intr, tol=10, preserve_topology=True)
                 make_status_map(gdf_aoi, gdf_intr_s, col_lbl_final, item, out_wksp)
-            '''
+
         except Exception as e:
             print(f'.......ERROR processing dataset {item}: {e}')
             failed_datasets.append({'item': item, 'reason': str(e)})
