@@ -722,9 +722,9 @@ if __name__ == "__main__":
         gdf_aoi = esri_to_gdf(aoi)
        
     elif input_src == 'TANTALIS':
-        fileNbr = '5408068'
-        dispID = 944133
-        prclID = 977370
+        fileNbr = '6409089'
+        dispID = 949271
+        prclID = 984052
      
         in_fileNbr = fileNbr
         in_dispID = dispID
@@ -755,7 +755,7 @@ if __name__ == "__main__":
     wkb_aoi, srid = get_wkb_srid(gdf_aoi)
     
     print('\nReading the AST datasets spreadsheet.')
-    region = 'cariboo'   ####### USER INPUT #######
+    region = 'skeena'   ####### USER INPUT #######
     print('....Region is {}'.format(region))
     df_stat = read_input_spreadsheets(wksp_xls, region)
     
@@ -819,8 +819,8 @@ if __name__ == "__main__":
                 # Validate with uppercase columns
                 validated_cols, missing_cols = validate_columns(cols_uppercase, available_cols, item, table, is_postgis=False)
                 
-                if missing_cols:
-                    failed_datasets.append({'item': item, 'reason': f'Missing columns: {", ".join(missing_cols)}'})
+                # REMOVED: Don't add to failed_datasets for missing columns
+                # Missing columns are warnings - the query will still run with available columns
                 
                 # Build the base query with validated columns
                 query = sql['oracle_overlay'].format(
@@ -881,15 +881,15 @@ if __name__ == "__main__":
                     # Validate with lowercase columns
                     validated_cols, missing_cols = validate_columns(cols_lowercase, available_cols, item, table_name, is_postgis=True)
                     
-                    if missing_cols:
-                        failed_datasets.append({'item': item, 'reason': f'Missing columns: {", ".join(missing_cols)}'})
+                    # REMOVED: Don't add to failed_datasets for missing columns
+                    # Missing columns are warnings - the query will still run with available columns
                     
                     # Get definition query for PostGIS (already handles lowercase)
                     pg_def_query = get_def_query(item_index, df_stat, for_postgis=True)
                     
-                    # Build PostGIS overlay query - no quotes needed, all lowercase
+                    # Build PostGIS overlay query
                     query = sql['postgis_overlay'].format(
-                        cols=validated_cols,  # Already lowercase
+                        cols=validated_cols,
                         schema=schema,
                         table=table_name,
                         def_query=pg_def_query
@@ -957,7 +957,7 @@ if __name__ == "__main__":
             print('.....number of overlaps: {}'.format(ov_nbr))
 
             results[item] = df_all_res
-
+            '''
             if ov_nbr > 0:
                 print('.....generating a map.')
                 gdf_intr = df_2_gdf(df_all, 3005)
@@ -982,7 +982,7 @@ if __name__ == "__main__":
                 
                 gdf_intr_s = simplify_geometries(gdf_intr, tol=10, preserve_topology=True)
                 make_status_map(gdf_aoi, gdf_intr_s, col_lbl_final, item, out_wksp)
-
+            '''
         except Exception as e:
             print(f'.......ERROR processing dataset {item}: {e}')
             failed_datasets.append({'item': item, 'reason': str(e)})
