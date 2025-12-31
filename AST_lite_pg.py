@@ -447,6 +447,24 @@ def get_oracle_columns(connection, cursor, table):
 
 
 
+def check_postgis_table_exists(pg_cursor, schema, table):
+    """Check if a PostGIS table exists"""
+    try:
+        query = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = %s 
+                    AND table_name = %s
+            )
+        """
+        pg_cursor.execute(query, (schema, table))
+        exists = pg_cursor.fetchone()[0]
+        return exists
+    except Exception as e:
+        print(f'.......ERROR checking if PostGIS table exists: {e}')
+        return False
+
+
 def get_postgis_columns(pg_connection, pg_cursor, schema, table):
     """Retrieves the list of available columns for a PostGIS table"""
     try:
@@ -696,7 +714,7 @@ if __name__ == "__main__":
     sql = load_queries()
     
     print('\nReading User inputs: AOI.')
-    input_src = 'AOI'  ####### USER INPUT ####### Possible values are "TANTALIS" and AOI
+    input_src = 'TANTALIS'  ####### USER INPUT ####### Possible values are "TANTALIS" and AOI
 
 
     if input_src == 'AOI':
@@ -704,9 +722,9 @@ if __name__ == "__main__":
         gdf_aoi = esri_to_gdf(aoi)
        
     elif input_src == 'TANTALIS':
-        fileNbr = '1413717'
-        dispID = 927132
-        prclID = 953951
+        fileNbr = '5408068'
+        dispID = 944133
+        prclID = 977370
      
         in_fileNbr = fileNbr
         in_dispID = dispID
@@ -737,7 +755,7 @@ if __name__ == "__main__":
     wkb_aoi, srid = get_wkb_srid(gdf_aoi)
     
     print('\nReading the AST datasets spreadsheet.')
-    region = 'west_coast'   ####### USER INPUT #######
+    region = 'cariboo'   ####### USER INPUT #######
     print('....Region is {}'.format(region))
     df_stat = read_input_spreadsheets(wksp_xls, region)
     
@@ -834,13 +852,24 @@ if __name__ == "__main__":
                     
                     print(f'.......Using PostGIS table: {schema}.{table_name}')
                     
+                    # First check if table exists
+                    print('.....checking if table exists in PostGIS')
+                    table_exists = check_postgis_table_exists(pg_cursor, schema, table_name)
+                    
+                    if not table_exists:
+                        print(f'.......SKIPPING dataset {item} - table {schema}.{table_name} not found in PostGIS')
+                        failed_datasets.append({'item': item, 'reason': f'Table not found in PostGIS: {schema}.{table_name}'})
+                        results[item] = pd.DataFrame([])
+                        counter += 1
+                        continue
+                    
                     # Validate columns exist in PostGIS table
                     print('.....validating columns')
                     available_cols = get_postgis_columns(pg_connection, pg_cursor, schema, table_name)
                     
                     if not available_cols:
-                        print(f'.......SKIPPING dataset {item} - could not retrieve PostGIS table columns')
-                        failed_datasets.append({'item': item, 'reason': f'Could not retrieve PostGIS columns for {schema}.{table_name}'})
+                        print(f'.......SKIPPING dataset {item} - table exists but no columns found')
+                        failed_datasets.append({'item': item, 'reason': f'No columns found in PostGIS table {schema}.{table_name}'})
                         results[item] = pd.DataFrame([])
                         counter += 1
                         continue
