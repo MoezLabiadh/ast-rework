@@ -42,14 +42,14 @@ engine = create_engine(
 # Input files configuration
 in_loc = r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets'
 in_files = {
-    'west_coast': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
-    'south_coast': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
-    'thompson_okanagan': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
-    'kootenay_boundary': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
-    'cariboo': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
-    'skeena': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
+    #'west_coast': os.path.join(in_loc, 'one_status_west_coast_specific.xlsx'),
+    #'south_coast': os.path.join(in_loc, 'one_status_south_coast_specific.xlsx'),
+    #'thompson_okanagan': os.path.join(in_loc, 'one_status_thompson_okanagan_specific.xlsx'),
+    #'kootenay_boundary': os.path.join(in_loc, 'one_status_kootenay_boundary_specific.xlsx'),
+    #'cariboo': os.path.join(in_loc, 'one_status_cariboo_specific.xlsx'),
+    #'skeena': os.path.join(in_loc, 'one_status_skeena_specific.xlsx'),
     'omineca': os.path.join(in_loc, 'one_status_omineca_specific.xlsx'),
-    'northeast': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
+    #'northeast': os.path.join(in_loc, 'one_status_northeast_specific.xlsx')
 }
 
 # Track statistics
@@ -253,12 +253,12 @@ def should_skip_dataset(datasource):
     """Check if dataset should be skipped based on name"""
     basename = os.path.basename(datasource).upper()
 
-    if basename.startswith('WHSE') or basename.startswith('REG'):
+    if basename.startswith('WHSE_') or basename.startswith('REG_'):
         return True
 
     if '.gdb' in datasource:
         fc_name = datasource.split('.gdb')[-1].strip('/\\').upper()
-        if fc_name.startswith('WHSE') or fc_name.startswith('REG'):
+        if fc_name.startswith('WHSE_') or fc_name.startswith('REG_'):
             return True
 
     return False
