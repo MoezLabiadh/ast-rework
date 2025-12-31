@@ -261,10 +261,14 @@ def get_def_query(item_index, df_stat, for_postgis=False):
     def_query = def_query.strip()
     
     if def_query == 'nan':
-        def_query = " "
+            def_query = " "
     else:
-       def_query = def_query.replace('"', '')
-       def_query = 'AND (' + def_query + ')'
+        def_query = def_query.replace('"', '')
+        # ESCAPE PERCENT FOR POSTGIS
+        if for_postgis:
+            def_query = def_query.replace('%', '%%')
+        
+        def_query = 'AND (' + def_query + ')'
     
     return def_query
 
@@ -728,9 +732,9 @@ if __name__ == "__main__":
         gdf_aoi = esri_to_gdf(aoi)
        
     elif input_src == 'TANTALIS':
-        fileNbr = '6409089'
-        dispID = 949271
-        prclID = 984052
+        fileNbr = '8015096'
+        dispID = 953116
+        prclID = 989206
      
         in_fileNbr = fileNbr
         in_dispID = dispID
@@ -761,7 +765,7 @@ if __name__ == "__main__":
     wkb_aoi, srid = get_wkb_srid(gdf_aoi)
     
     print('\nReading the AST datasets spreadsheet.')
-    region = 'skeena'   ####### USER INPUT #######
+    region = 'northeast'   ####### USER INPUT #######
     print('....Region is {}'.format(region))
     df_stat = read_input_spreadsheets(wksp_xls, region)
     
