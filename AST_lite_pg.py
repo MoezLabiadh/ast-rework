@@ -1,5 +1,5 @@
 """
-Name:        Automatic Status Tool - LITE version! DRAFT
+Automatic Status Tool - LITE Version
 
 Purpose:     This script checks for overlaps between an AOI and datasets
              specified in the AST datasets spreadsheets (common and region specific). 
@@ -7,115 +7,289 @@ Purpose:     This script checks for overlaps between an AOI and datasets
 Notes        The script supports AOIs in TANTALIS Crown Tenure spatial view 
              and User defined AOIs (shp, featureclass).
                
-             The script generates a spreadhseet of conflicts and 
-             Interactive HTML maps showing the AOI and ovelappng features
+             The script generates a spreadhseet of conflicts (TAB3) of the 
+             standard AST reportand Interactive HTML maps showing the AOI and ovelappng features
 
-             This version uses PostGIS to process local datasets instead of Geopandas
+            This version of the script uses postgis to process local datasets.
                              
 Arguments:   - Output location (workspace)
-             - BCGW username
-             - BCGW password
+             - DB credentials for Oracle/BCGW and PostGIS
+             - Input source: TANTALIS OR AOI
              - Region (west coast, skeena...)
-             - AOI: - ESRI shp or featureclass OR
-                    - File number
-                    - Disposition ID
-                    - Parcel ID
-                
-Author:      Moez Labiadh - GeoBC
+             - AOI: - ESRI shp or featureclass (AOI) OR
+                    - TANTALIS File number
+                    - TANTALIS Disposition ID
+                    - TANTALIS Parcel ID
 
-Created:     2025-12-23
-Updated:     2025-12-30
+Author: Moez Labiadh - GeoBC
+
+Created: 2025-12-23
+Updated: 2025-01-05
 """
 
 import warnings
 warnings.simplefilter(action='ignore')
 
-
 import os
 import re
 import timeit
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional, Any, Union
+
 import oracledb
 import psycopg2
 import pandas as pd
 import folium
 import geopandas as gpd
-from pathlib import Path
 from shapely import from_wkt, wkb
 
 
+# ============================================================================
+# DATABASE CONNECTION CLASSES
+# ============================================================================
 
-def connect_to_Oracle(username, password, hostname):
-    """Returns a connection and cursor to Oracle database"""
-    try:
-        connection = oracledb.connect(user=username, password=password, dsn=hostname)
-        cursor = connection.cursor()
-        print("....Successfully connected to Oracle database")
-    except:
-        raise Exception('....Connection failed! Please check your login parameters')
-    return connection, cursor
+class DatabaseConnection:
+    """Base class for database connections with context manager support."""
+    
+    def __init__(self):
+        self.connection = None
+        self.cursor = None
+    
+    def __enter__(self):
+        return self.connection, self.cursor
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+    
+    def close(self) -> None:
+        """Close cursor and connection safely."""
+        if self.cursor:
+            try:
+                self.cursor.close()
+            except Exception as e:
+                print(f"Warning: Error closing cursor: {e}")
+        
+        if self.connection:
+            try:
+                self.connection.close()
+            except Exception as e:
+                print(f"Warning: Error closing connection: {e}")
 
 
+class OracleConnection(DatabaseConnection):
+    """Oracle database connection manager."""
+    
+    def __init__(self, username: str, password: str, hostname: str):
+        super().__init__()
+        self.username = username
+        self.password = password
+        self.hostname = hostname
+        self._connect()
+    
+    def _connect(self) -> None:
+        """Establish connection to Oracle database."""
+        try:
+            self.connection = oracledb.connect(
+                user=self.username,
+                password=self.password,
+                dsn=self.hostname
+            )
+            self.cursor = self.connection.cursor()
+            print("....Successfully connected to Oracle database")
+        except Exception as e:
+            raise Exception(f'....Oracle connection failed! Error: {e}')
 
-def connect_to_PostGIS(host, database, user, password, port=5432):
-    """Returns a connection and cursor to PostGIS database"""
-    try:
-        connection = psycopg2.connect(
-            host=host,
-            database=database,
-            user=user,
-            password=password,
-            port=port
-        )
-        cursor = connection.cursor()
-        print("....Successfully connected to PostGIS database")
-    except Exception as e:
-        raise Exception(f'....PostGIS connection failed! Error: {e}')
-    return connection, cursor
+
+class PostGISConnection(DatabaseConnection):
+    """PostGIS database connection manager."""
+    
+    def __init__(self, host: str, database: str, user: str, password: str, port: int = 5432):
+        super().__init__()
+        self.host = host
+        self.database = database
+        self.user = user
+        self.password = password
+        self.port = port
+        self._connect()
+    
+    def _connect(self) -> None:
+        """Establish connection to PostGIS database."""
+        try:
+            self.connection = psycopg2.connect(
+                host=self.host,
+                database=self.database,
+                user=self.user,
+                password=self.password,
+                port=self.port
+            )
+            self.cursor = self.connection.cursor()
+            print("....Successfully connected to PostGIS database")
+        except Exception as e:
+            raise Exception(f'....PostGIS connection failed! Error: {e}')
 
 
+# ============================================================================
+# QUERY UTILITIES
+# ============================================================================
 
-def read_query(connection, cursor, query, bvars):
-    """Returns a df containing SQL Query results"""
-    cursor.execute(query, bvars)
+def read_query(connection: Any, cursor: Any, query: str, bind_vars: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Execute SQL query and return results as DataFrame.
+    
+    Args:
+        connection: Database connection object
+        cursor: Database cursor object
+        query: SQL query string
+        bind_vars: Dictionary of bind variables
+    
+    Returns:
+        DataFrame containing query results
+    """
+    cursor.execute(query, bind_vars)
     names = [x[0] for x in cursor.description]
     rows = cursor.fetchall()
-    df = pd.DataFrame(rows, columns=names)
-    return df
+    return pd.DataFrame(rows, columns=names)
 
 
-
-def esri_to_gdf(aoi):
-    """Returns a Geopandas file (gdf) based on 
-       an ESRI format vector (shp or featureclass/gdb)"""
-    if '.shp' in aoi: 
-        gdf = gpd.read_file(aoi)
-    elif '.gdb' in aoi:
-        l = aoi.split('.gdb')
-        gdb = l[0] + '.gdb'
-        fc = os.path.basename(aoi)
-        gdf = gpd.read_file(filename=gdb, layer=fc)
-    else:
-        raise Exception('Format not recognized. Please provide a shp or featureclass (gdb)!')
-    return gdf
-
-
-
-def df_2_gdf(df, crs):
-    """Return a geopandas gdf based on a df with Geometry column, handling curve geometries"""
-    df_clean = pd.DataFrame()
+def load_sql_queries() -> Dict[str, str]:
+    """
+    Load all SQL query templates.
     
-    # Handle both 'SHAPE' (Oracle) and 'shape' (PostGIS) column names
-    if 'SHAPE' in df.columns:
-        shape_col = 'SHAPE'
-    elif 'shape' in df.columns:
-        shape_col = 'shape'
-    else:
-        raise ValueError("No geometry column found. Expected 'SHAPE' or 'shape'")
+    Returns:
+        Dictionary of SQL query strings
+    """
+    return {
+        # Oracle queries
+        'aoi': """
+            SELECT SDO_UTIL.TO_WKTGEOMETRY(a.SHAPE) SHAPE
+            FROM WHSE_TANTALIS.TA_CROWN_TENURES_SVW a
+            WHERE a.CROWN_LANDS_FILE = :file_nbr
+                AND a.DISPOSITION_TRANSACTION_SID = :disp_id
+                AND a.INTRID_SID = :parcel_id
+        """,
+        
+        'geomCol': """
+            SELECT column_name GEOM_NAME
+            FROM ALL_SDO_GEOM_METADATA
+            WHERE owner = :owner
+                AND table_name = :tab_name
+        """,
+        
+        'srid': """
+            SELECT s.{geom_col}.sdo_srid SP_REF
+            FROM {tab} s
+            WHERE rownum = 1
+        """,
+        
+        'oracle_overlay': """
+            SELECT {cols},
+                   CASE WHEN SDO_GEOM.SDO_DISTANCE({geom_col}, SDO_GEOMETRY(:wkb_aoi, :srid), 0.5) = 0 
+                    THEN 'INTERSECT' 
+                     ELSE 'Within ' || TO_CHAR({radius}) || ' m'
+                      END AS RESULT,
+                   SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
+            FROM {tab}
+            WHERE SDO_WITHIN_DISTANCE ({geom_col}, 
+                                       SDO_GEOMETRY(:wkb_aoi, :srid),'distance = {radius}') = 'TRUE'
+                {def_query}
+        """,
+        
+        # PostGIS queries
+        'postgis_overlay': """
+            SELECT {cols},
+                   CASE 
+                       WHEN ST_Intersects(geometry, ST_GeomFromWKB(%s, %s)) 
+                       THEN 'INTERSECT'
+                       ELSE 'Within ' || %s || ' m'
+                   END AS result,
+                   ST_AsText(geometry) AS shape
+            FROM {schema}.{table}
+            WHERE ST_DWithin(geometry, ST_GeomFromWKB(%s, %s), %s)
+            {def_query}
+        """
+    }
+
+
+# ============================================================================
+# GEOMETRY UTILITIES
+# ============================================================================
+
+class GeometryProcessor:
+    """Handles geometry operations and conversions."""
     
-    shape_series = df[shape_col].astype(str)
+    @staticmethod
+    def esri_to_gdf(aoi_path: str) -> gpd.GeoDataFrame:
+        """
+        Convert ESRI format vector to GeoDataFrame.
+        
+        Args:
+            aoi_path: Path to shapefile or feature class
+        
+        Returns:
+            GeoDataFrame
+        """
+        if '.shp' in aoi_path:
+            return gpd.read_file(aoi_path)
+        elif '.gdb' in aoi_path:
+            parts = aoi_path.split('.gdb')
+            gdb = parts[0] + '.gdb'
+            fc = os.path.basename(aoi_path)
+            return gpd.read_file(filename=gdb, layer=fc)
+        else:
+            raise ValueError('Format not recognized. Please provide a shp or featureclass (gdb)!')
     
-    def linearize_geometry(wkt_str):
-        """Convert curve geometries to linear approximations"""
+    @staticmethod
+    def df_to_gdf(df: pd.DataFrame, crs: int) -> gpd.GeoDataFrame:
+        """
+        Convert DataFrame with geometry column to GeoDataFrame.
+        
+        Args:
+            df: DataFrame with SHAPE or shape column
+            crs: EPSG code for coordinate reference system
+        
+        Returns:
+            GeoDataFrame
+        """
+        # Determine geometry column name
+        shape_col = 'SHAPE' if 'SHAPE' in df.columns else 'shape'
+        if shape_col not in df.columns:
+            raise ValueError("No geometry column found. Expected 'SHAPE' or 'shape'")
+        
+        shape_series = df[shape_col].astype(str)
+        
+        # Process geometries
+        processed_wkts = [
+            GeometryProcessor._process_geometry(wkt) 
+            for wkt in shape_series
+        ]
+        
+        # Create clean DataFrame without geometry column
+        df_clean = df.drop(columns=[shape_col]).copy()
+        
+        # Create GeoDataFrame
+        df_clean['geometry'] = gpd.GeoSeries.from_wkt(
+            processed_wkts, 
+            crs=f"EPSG:{crs}"
+        )
+        
+        return gpd.GeoDataFrame(df_clean, geometry='geometry', crs=f"EPSG:{crs}")
+    
+    @staticmethod
+    def _process_geometry(wkt_str: str) -> Optional[str]:
+        """Process geometry string, linearizing curves if needed."""
+        if wkt_str is None or not isinstance(wkt_str, str):
+            return None
+        
+        # Check if geometry contains curves
+        curve_types = ['CURVE', 'CIRCULARSTRING', 'COMPOUNDCURVE']
+        if any(curve_type in wkt_str.upper() for curve_type in curve_types):
+            return GeometryProcessor._linearize_geometry(wkt_str)
+        
+        return wkt_str
+    
+    @staticmethod
+    def _linearize_geometry(wkt_str: str) -> Optional[str]:
+        """Convert curve geometries to linear approximations."""
         from osgeo import ogr
         try:
             geom = ogr.CreateGeometryFromWkt(wkt_str)
@@ -127,903 +301,1094 @@ def df_2_gdf(df, crs):
             print(f"Error processing geometry: {e}")
             return None
     
-    def process_geometry(wkt_str):
-        """Only linearize if it contains curve geometry types"""
-        if wkt_str is None or not isinstance(wkt_str, str):
-            return None
-        if any(curve_type in wkt_str.upper() for curve_type in ['CURVE', 'CIRCULARSTRING', 'COMPOUNDCURVE']):
-            return linearize_geometry(wkt_str)
-        return wkt_str
+    @staticmethod
+    def multipart_to_singlepart(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        """Convert multipart GeoDataFrame to singlepart."""
+        gdf['dissolvefield'] = 1
+        gdf = gdf.dissolve(by='dissolvefield')
+        gdf.reset_index(inplace=True)
+        return gdf[['geometry']]
     
-    processed_wkts = [process_geometry(wkt) for wkt in shape_series]
+    @staticmethod
+    def get_wkb_srid(gdf: gpd.GeoDataFrame) -> Tuple[bytes, int]:
+        """
+        Extract WKB and SRID from GeoDataFrame.
+        
+        Args:
+            gdf: GeoDataFrame
+        
+        Returns:
+            Tuple of (WKB bytes, SRID integer)
+        """
+        srid = gdf.crs.to_epsg()
+        geom = gdf['geometry'].iloc[0]
+        
+        # Handle 3D geometries
+        if geom.has_z:
+            wkb_aoi = wkb.dumps(geom, output_dimension=2)
+        else:
+            wkb_aoi = wkb.dumps(geom)
+        
+        return wkb_aoi, srid
     
-    for col in df.columns:
-        if col not in [shape_col]:  # Exclude the geometry column (either SHAPE or shape)
-            df_clean[col] = df[col].values
+    @staticmethod
+    def simplify_geometries(
+        gdf: gpd.GeoDataFrame, 
+        tolerance: float = 10, 
+        preserve_topology: bool = True
+    ) -> gpd.GeoDataFrame:
+        """Simplify geometries for web map display."""
+        gdf = gdf.copy()
+        gdf["geometry"] = gdf.geometry.simplify(
+            tolerance=tolerance, 
+            preserve_topology=preserve_topology
+        )
+        return gdf
+
+
+# ============================================================================
+# DATASET CONFIGURATION
+# ============================================================================
+
+class DatasetConfig:
+    """Handles reading and parsing dataset configuration spreadsheets."""
     
-    df_clean['geometry'] = gpd.GeoSeries.from_wkt(processed_wkts, crs=f"EPSG:{crs}")
-    gdf = gpd.GeoDataFrame(df_clean, geometry='geometry', crs=f"EPSG:{crs}")
-
-    return gdf
-
-
-
-def multipart_to_singlepart(gdf):
-    """Converts a multipart gdf to singlepart gdf"""
-    gdf['dissolvefield'] = 1
-    gdf = gdf.dissolve(by='dissolvefield')
-    gdf.reset_index(inplace=True)
-    gdf = gdf[['geometry']]
-    return gdf
-
-
-
-def get_wkb_srid(gdf):
-    """Returns SRID and WKB objects from gdf"""
-    srid = gdf.crs.to_epsg()
-    geom = gdf['geometry'].iloc[0]
-    wkb_aoi = wkb.dumps(geom)
+    @staticmethod
+    def read_spreadsheets(workspace_xls: str, region: str) -> pd.DataFrame:
+        """
+        Read and combine common and region-specific dataset spreadsheets.
+        
+        Args:
+            workspace_xls: Path to spreadsheet directory
+            region: Region name (e.g., 'northeast')
+        
+        Returns:
+            Combined DataFrame
+        """
+        common_xls = os.path.join(workspace_xls, 'one_status_common_datasets.xlsx')
+        region_xls = os.path.join(
+            workspace_xls, 
+            f'one_status_{region.lower()}_specific.xlsx'
+        )
+        
+        df_common = pd.read_excel(common_xls)
+        df_region = pd.read_excel(region_xls)
+        
+        df_combined = pd.concat([df_common, df_region])
+        df_combined.dropna(how='all', inplace=True)
+        df_combined.reset_index(drop=True, inplace=True)
+        
+        return df_combined
     
-    if geom.has_z:
-        wkb_aoi = wkb.dumps(geom, output_dimension=2)
+    @staticmethod
+    def get_table_columns(item_index: int, df_stat: pd.DataFrame) -> Tuple[str, str, str]:
+        """
+        Extract table name and column information from config.
+        
+        Args:
+            item_index: Row index in config DataFrame
+            df_stat: Configuration DataFrame
+        
+        Returns:
+            Tuple of (table_name, columns_csv, label_column)
+        """
+        df_item = df_stat.loc[[item_index]].fillna('nan')
+        
+        table = df_item['Datasource'].iloc[0].strip()
+        
+        # Collect all field columns
+        fields = []
+        first_field = str(df_item['Fields_to_Summarize'].iloc[0].strip())
+        if first_field != 'nan':
+            fields.append(first_field)
+        
+        for i in range(2, 7):
+            col_name = f'Fields_to_Summarize{i}'
+            if col_name in df_item.columns:
+                for field in df_item[col_name].tolist():
+                    if field != 'nan':
+                        fields.append(str(field).strip())
+        
+        # Add map label field if not already included
+        label_col = df_item['map_label_field'].iloc[0].strip()
+        if label_col != 'nan' and label_col not in fields:
+            fields.append(label_col)
+        
+        cols_csv = ','.join(fields) if fields else ''
+        
+        return table, cols_csv, label_col
     
-    return wkb_aoi, srid
-
-
-
-def get_table_name_from_datasource(datasource):
-    """Extract table name from datasource path and clean it for PostgreSQL"""
-    path = Path(datasource)
-    
-    if path.suffix.lower() == '.shp':
-        table_name = path.stem
-    elif '.gdb' in datasource:
-        after_gdb = datasource.split('.gdb')[-1]
-        after_gdb = after_gdb.strip('/\\')
-        table_name = after_gdb.split('\\')[-1].split('/')[-1]
-    else:
-        table_name = path.stem
-    
-    table_name = table_name.lower()
-    table_name = re.sub(r'[^a-z0-9_]', '_', table_name)
-    table_name = re.sub(r'_+', '_', table_name)
-    table_name = table_name.strip('_')
-    
-    if table_name and table_name[0].isdigit():
-        table_name = 't_' + table_name
-    
-    if len(table_name) > 50:
-        original_length = len(table_name)
-        table_name = table_name[:50].rstrip('_')
-        print(f"    Note: Table name truncated from {original_length} to {len(table_name)} characters")
-    
-    return table_name
-
-
-
-def read_input_spreadsheets(wksp_xls, region):
-    """Returns input spreadsheets"""
-    common_xls = os.path.join(wksp_xls, 'one_status_common_datasets.xlsx')
-    region_xls = os.path.join(wksp_xls, 'one_status_{}_specific.xlsx'.format(region.lower()))
-    
-    df_stat_c = pd.read_excel(common_xls)
-    df_stat_r = pd.read_excel(region_xls)
-    
-    df_stat = pd.concat([df_stat_c, df_stat_r])
-    df_stat.dropna(how='all', inplace=True)
-    df_stat = df_stat.reset_index(drop=True)
-    
-    return df_stat
-
-
-def get_table_cols(item_index, df_stat):
-    """Returns table and field names from the AST datasets spreadsheet"""
-    df_stat_item = df_stat.loc[[item_index]]
-    df_stat_item.fillna(value='nan', inplace=True)
-
-    table = df_stat_item['Datasource'].iloc[0].strip()
-    
-    fields = []
-    
-    # Collect all Fields_to_Summarize columns
-    first_field = str(df_stat_item['Fields_to_Summarize'].iloc[0].strip())
-    if first_field != 'nan':
-        fields.append(first_field)
-
-    for f in range(2, 7):
-        for i in df_stat_item['Fields_to_Summarize' + str(f)].tolist():
-            if i != 'nan':
-                fields.append(str(i.strip()))
-
-    # Add map_label_field if it exists and isn't already in the list
-    col_lbl = df_stat_item['map_label_field'].iloc[0].strip()
-    
-    if col_lbl != 'nan' and col_lbl not in fields:
-        fields.append(col_lbl)
-    
-    # Return as comma-separated string for consistency
-    if fields:
-        cols = ','.join(fields)
-    else:
-        cols = ''
-    
-    return table, cols, col_lbl
-
-
-
-def get_def_query(item_index, df_stat, for_postgis=False):
-    """Returns a SQL formatted def query (if any) from the AST datasets spreadsheet"""
-    df_stat_item = df_stat.loc[[item_index]]
-    df_stat_item.fillna(value='nan', inplace=True)
-
-
-    def_query = df_stat_item['Definition_Query'].iloc[0].strip()
-    def_query = def_query.strip()
-    
-    if def_query == 'nan':
-            def_query = " "
-    else:
+    @staticmethod
+    def get_definition_query(
+        item_index: int, 
+        df_stat: pd.DataFrame, 
+        for_postgis: bool = False
+    ) -> str:
+        """
+        Extract and format definition query from config.
+        
+        Args:
+            item_index: Row index in config DataFrame
+            df_stat: Configuration DataFrame
+            for_postgis: Whether to format for PostGIS
+        
+        Returns:
+            Formatted SQL WHERE clause
+        """
+        df_item = df_stat.loc[[item_index]].fillna('nan')
+        def_query = df_item['Definition_Query'].iloc[0].strip()
+        
+        if def_query == 'nan' or not def_query:
+            return ""
+        
         def_query = def_query.replace('"', '')
-        # ESCAPE PERCENT FOR POSTGIS
+        
+        # Escape percent signs for PostGIS
         if for_postgis:
             def_query = def_query.replace('%', '%%')
         
-        def_query = 'AND (' + def_query + ')'
+        return f'AND ({def_query})'
     
-    return def_query
+    @staticmethod
+    def get_buffer_distance(item_index: int, df_stat: pd.DataFrame) -> int:
+        """
+        Extract buffer distance from config.
+        
+        Args:
+            item_index: Row index in config DataFrame
+            df_stat: Configuration DataFrame
+        
+        Returns:
+            Buffer distance in meters
+        """
+        df_item = df_stat.loc[[item_index]].fillna(0)
+        df_item['Buffer_Distance'] = df_item['Buffer_Distance'].astype(int)
+        return df_item['Buffer_Distance'].iloc[0]
 
 
+# ============================================================================
+# ORACLE DATABASE UTILITIES
+# ============================================================================
 
-def get_radius(item_index, df_stat):
-    """Returns the buffer distance (if any) from the AST common datasets spreadsheet"""
-    df_stat_item = df_stat.loc[[item_index]]
-    df_stat_item.fillna(value=0, inplace=True)
-    df_stat_item['Buffer_Distance'] = df_stat_item['Buffer_Distance'].astype(int)
-    radius = df_stat_item['Buffer_Distance'].iloc[0]
-    return radius
-
-
-
-def filter_invalid_oracle_geom(query, table_name, geom_col):
-    """Apply geometry validation filter for specific problematic Oracle tables"""
+class OracleUtils:
+    """Utilities for working with Oracle/BCGW datasets."""
+    
     PROBLEMATIC_TABLES = [
         'WHSE_CADASTRE.PMBC_PARCEL_FABRIC_POLY_FA_SVW',
         'WHSE_CADASTRE.PMBC_PARCEL_FABRIC_POLY_SVW'
     ]
-
-    if table_name not in PROBLEMATIC_TABLES:
+    
+    @staticmethod
+    def get_geometry_column(
+        connection: Any, 
+        cursor: Any, 
+        table: str, 
+        geom_query: str
+    ) -> str:
+        """Get geometry column name for Oracle table."""
+        parts = table.split('.')
+        bind_vars = {'owner': parts[0].strip(), 'tab_name': parts[1].strip()}
+        df = read_query(connection, cursor, geom_query, bind_vars)
+        return df['GEOM_NAME'].iloc[0]
+    
+    @staticmethod
+    def get_srid(
+        connection: Any, 
+        cursor: Any, 
+        table: str, 
+        geom_col: str, 
+        srid_query: str
+    ) -> Optional[int]:
+        """Get SRID for Oracle table."""
+        try:
+            query = srid_query.format(tab=table, geom_col=geom_col)
+            df = read_query(connection, cursor, query, {})
+            
+            if df.empty or df.shape[0] == 0:
+                print(f'.......WARNING: Table {table} is empty, cannot determine SRID')
+                return None
+            
+            return df['SP_REF'].iloc[0]
+        except (IndexError, Exception) as e:
+            print(f'.......WARNING: Cannot determine SRID for {table}: {e}')
+            return None
+    
+    @staticmethod
+    def get_columns(connection: Any, cursor: Any, table: str) -> List[str]:
+        """Retrieve list of available columns for Oracle table."""
+        try:
+            query = """
+                SELECT column_name 
+                FROM all_tab_columns 
+                WHERE owner = :owner 
+                    AND table_name = :tab_name
+            """
+            parts = table.split('.')
+            bind_vars = {'owner': parts[0].strip(), 'tab_name': parts[1].strip()}
+            df = read_query(connection, cursor, query, bind_vars)
+            
+            return df['COLUMN_NAME'].tolist() if not df.empty else []
+        except Exception as e:
+            print(f'.......ERROR retrieving columns for {table}: {e}')
+            return []
+    
+    @staticmethod
+    def apply_geometry_validation(query: str, table: str, geom_col: str) -> str:
+        """Apply geometry validation filter for problematic Oracle tables."""
+        if table not in OracleUtils.PROBLEMATIC_TABLES:
+            return query
+        
+        print('.......applying SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT filter')
+        print('.......Note: All invalid geometries will be excluded')
+        
+        validation_clause = (
+            f"SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT({geom_col}, 0.5) = 'TRUE'\n  AND "
+        )
+        
+        return query.replace(
+            'WHERE SDO_WITHIN_DISTANCE',
+            f'WHERE {validation_clause}SDO_WITHIN_DISTANCE'
+        )
+    
+    @staticmethod
+    def apply_coordinate_transform(query: str, geom_col: str, srid_t: int) -> str:
+        """Apply coordinate transformation when SRIDs don't match."""
+        print(f'.......Applying coordinate transformation (table SRID: {srid_t})')
+        
+        # Transform in SDO_GEOM.SDO_DISTANCE
+        query = query.replace(
+            'SDO_GEOMETRY(:wkb_aoi, :srid), 0.5)',
+            'SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t), 0.5)'
+        )
+        
+        # Transform in SDO_WITHIN_DISTANCE
+        query = query.replace(
+            'SDO_GEOMETRY(:wkb_aoi, :srid),',
+            'SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t),'
+        )
+        
+        # Transform output geometry
+        query = query.replace(
+            f'SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE',
+            f'SDO_UTIL.TO_WKTGEOMETRY(SDO_CS.TRANSFORM({geom_col}, :srid_t, :srid)) SHAPE'
+        )
+        
         return query
 
-    print('.......applying SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT filter (only TRUE geometries kept)')
-    print('.......Note: All invalid geometries will be excluded from the overlay')
 
-    validation_clause = (
-        f"SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT({geom_col}, 0.5) = 'TRUE'\n  AND "
-    )
+# ============================================================================
+# POSTGIS DATABASE UTILITIES
+# ============================================================================
 
-    query = query.replace(
-        'WHERE SDO_WITHIN_DISTANCE',
-        f'WHERE {validation_clause}SDO_WITHIN_DISTANCE'
-    )
-
-    return query
-
-
-
-def apply_coordinate_transform(query, geom_col, srid_t):
-    """Apply coordinate transformation to Oracle spatial query when SRIDs don't match"""
+class PostGISUtils:
+    """Utilities for working with PostGIS datasets."""
     
-    print(f'.......Applying coordinate transformation (table SRID: {srid_t})')
-    
-    # Pattern 1: In SDO_GEOM.SDO_DISTANCE
-    query = query.replace(
-        f'SDO_GEOMETRY(:wkb_aoi, :srid), 0.5)',
-        f'SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t), 0.5)'
-    )
-    
-    # Pattern 2: In SDO_WITHIN_DISTANCE
-    query = query.replace(
-        f'SDO_GEOMETRY(:wkb_aoi, :srid),',
-        f'SDO_CS.TRANSFORM(SDO_GEOMETRY(:wkb_aoi, :srid), :srid, :srid_t),'
-    )
-    
-    # Pattern 3: In the SELECT - transform output geometry
-    query = query.replace(
-        f'SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE',
-        f'SDO_UTIL.TO_WKTGEOMETRY(SDO_CS.TRANSFORM({geom_col}, :srid_t, :srid)) SHAPE'
-    )
-    
-    return query
-
-
-def load_queries():
-    """Load SQL queries for Oracle and PostGIS"""
-    sql = {}
-
-
-    # Oracle queries
-    sql['aoi'] = """
-                    SELECT SDO_UTIL.TO_WKTGEOMETRY(a.SHAPE) SHAPE
-                    FROM  WHSE_TANTALIS.TA_CROWN_TENURES_SVW a
-                    WHERE a.CROWN_LANDS_FILE = :file_nbr
-                        AND a.DISPOSITION_TRANSACTION_SID = :disp_id
-                        AND a.INTRID_SID = :parcel_id
-                  """
-                        
-    sql['geomCol'] = """
-                    SELECT column_name GEOM_NAME
-                    FROM  ALL_SDO_GEOM_METADATA
-                    WHERE owner = :owner
-                        AND table_name = :tab_name
-                    """    
-                    
-    sql['srid'] = """
-                    SELECT s.{geom_col}.sdo_srid SP_REF
-                    FROM {tab} s
-                    WHERE rownum = 1
-                   """
-                                 
-    sql['oracle_overlay'] = """
-                    SELECT {cols},
-                           CASE WHEN SDO_GEOM.SDO_DISTANCE({geom_col}, SDO_GEOMETRY(:wkb_aoi, :srid), 0.5) = 0 
-                            THEN 'INTERSECT' 
-                             ELSE 'Within ' || TO_CHAR({radius}) || ' m'
-                              END AS RESULT,
-                           SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
-                    FROM {tab}
-                    WHERE SDO_WITHIN_DISTANCE ({geom_col}, 
-                                               SDO_GEOMETRY(:wkb_aoi, :srid),'distance = {radius}') = 'TRUE'
-                        {def_query}   
-                                  """ 
-    
-    # PostGIS queries
-    sql['postgis_overlay'] = """
-                    SELECT {cols},
-                           CASE 
-                               WHEN ST_Intersects(geometry, ST_GeomFromWKB(%s, %s)) 
-                               THEN 'INTERSECT'
-                               ELSE 'Within ' || %s || ' m'
-                           END AS result,
-                           ST_AsText(geometry) AS shape
-                    FROM {schema}.{table}
-                    WHERE ST_DWithin(geometry, ST_GeomFromWKB(%s, %s), %s)
-                    {def_query}
-                    """
-    
-    return sql
-
-
-
-def get_geom_colname(connection, cursor, table, geomQuery):
-    """Returns the geometry column of BCGW table name: can be either SHAPE or GEOMETRY"""
-    el_list = table.split('.')
-    bvars_geom = {'owner': el_list[0].strip(), 'tab_name': el_list[1].strip()}
-    df_g = read_query(connection, cursor, geomQuery, bvars_geom)
-    geom_col = df_g['GEOM_NAME'].iloc[0]
-    return geom_col
-
-
-
-def get_geom_srid(connection, cursor, table, geom_col, sridQuery):
-    """Returns the SRID of the BCGW table, or None if table is empty"""
-    try:
-        sridQuery = sridQuery.format(tab=table, geom_col=geom_col)
-        df_s = read_query(connection, cursor, sridQuery, {})
+    @staticmethod
+    def get_table_name_from_datasource(datasource: str) -> str:
+        """Extract and clean table name from datasource path."""
+        path = Path(datasource)
         
-        if df_s.empty or df_s.shape[0] == 0:
-            print(f'.......WARNING: Table {table} is empty, cannot determine SRID')
-            return None
-            
-        srid_t = df_s['SP_REF'].iloc[0]
-        return srid_t
+        if path.suffix.lower() == '.shp':
+            table_name = path.stem
+        elif '.gdb' in datasource:
+            after_gdb = datasource.split('.gdb')[-1]
+            after_gdb = after_gdb.strip('/\\')
+            table_name = after_gdb.split('\\')[-1].split('/')[-1]
+        else:
+            table_name = path.stem
         
-    except IndexError:
-        print(f'.......WARNING: Table {table} appears to be empty, cannot determine SRID')
-        return None
-    except Exception as e:
-        print(f'.......ERROR getting SRID for {table}: {e}')
-        return None
-
-
-
-def get_oracle_columns(connection, cursor, table):
-    """Retrieves the list of available columns for an Oracle table"""
-    try:
-        query = """
-            SELECT column_name 
-            FROM all_tab_columns 
-            WHERE owner = :owner 
-                AND table_name = :tab_name
-        """
+        # Clean table name for PostgreSQL
+        table_name = table_name.lower()
+        table_name = re.sub(r'[^a-z0-9_]', '_', table_name)
+        table_name = re.sub(r'_+', '_', table_name)
+        table_name = table_name.strip('_')
         
-        el_list = table.split('.')
-        bvars = {'owner': el_list[0].strip(), 'tab_name': el_list[1].strip()}
-        df_cols = read_query(connection, cursor, query, bvars)
+        # Ensure doesn't start with digit
+        if table_name and table_name[0].isdigit():
+            table_name = 't_' + table_name
         
-        if df_cols.empty:
-            return []
-            
-        return df_cols['COLUMN_NAME'].tolist()
+        # Truncate if too long
+        if len(table_name) > 50:
+            original_length = len(table_name)
+            table_name = table_name[:50].rstrip('_')
+            print(f"    Note: Table name truncated from {original_length} to {len(table_name)} chars")
         
-    except Exception as e:
-        print(f'.......ERROR retrieving columns for {table}: {e}')
-        return []
-
-
-
-def check_postgis_table_exists(pg_cursor, schema, table):
-    """Check if a PostGIS table exists"""
-    try:
-        query = """
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
+        return table_name
+    
+    @staticmethod
+    def table_exists(cursor: Any, schema: str, table: str) -> bool:
+        """Check if PostGIS table exists."""
+        try:
+            query = """
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = %s 
+                        AND table_name = %s
+                )
+            """
+            cursor.execute(query, (schema, table))
+            return cursor.fetchone()[0]
+        except Exception as e:
+            print(f'.......ERROR checking if PostGIS table exists: {e}')
+            # Rollback the transaction to recover from error state
+            try:
+                cursor.connection.rollback()
+            except:
+                pass
+            return False
+    
+    @staticmethod
+    def get_columns(connection: Any, cursor: Any, schema: str, table: str) -> List[str]:
+        """Retrieve list of available columns for PostGIS table."""
+        try:
+            query = """
+                SELECT column_name 
+                FROM information_schema.columns 
                 WHERE table_schema = %s 
                     AND table_name = %s
-            )
+                    AND column_name != 'geometry'
+            """
+            cursor.execute(query, (schema, table))
+            return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            print(f'.......ERROR retrieving PostGIS columns for {schema}.{table}: {e}')
+            return []
+
+
+# ============================================================================
+# COLUMN VALIDATION
+# ============================================================================
+
+class ColumnValidator:
+    """Validates and normalizes column names for database queries."""
+    
+    @staticmethod
+    def convert_to_uppercase(cols_str: str) -> str:
+        """Convert comma-separated column names to uppercase for Oracle."""
+        if not cols_str:
+            return ''
+        cols_list = [c.strip().upper() for c in cols_str.split(',')]
+        return ','.join(cols_list)
+    
+    @staticmethod
+    def convert_to_lowercase(cols_str: str) -> str:
+        """Convert comma-separated column names to lowercase for PostGIS."""
+        if not cols_str:
+            return ''
+        cols_list = [c.strip().lower() for c in cols_str.split(',')]
+        return ','.join(cols_list)
+    
+    @staticmethod
+    def validate_columns(
+        cols: str, 
+        available_cols: List[str], 
+        item: str, 
+        table: str, 
+        is_postgis: bool = False
+    ) -> Tuple[str, List[str]]:
         """
-        pg_cursor.execute(query, (schema, table))
-        exists = pg_cursor.fetchone()[0]
-        return exists
-    except Exception as e:
-        print(f'.......ERROR checking if PostGIS table exists: {e}')
-        return False
-
-
-def get_postgis_columns(pg_connection, pg_cursor, schema, table):
-    """Retrieves the list of available columns for a PostGIS table"""
-    try:
-        query = """
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_schema = %s 
-                AND table_name = %s
-                AND column_name != 'geometry'
+        Validate that requested columns exist in dataset.
+        
+        Args:
+            cols: Comma-separated column names
+            available_cols: List of available columns
+            item: Dataset item name
+            table: Table name
+            is_postgis: Whether this is a PostGIS table
+        
+        Returns:
+            Tuple of (validated_columns_csv, missing_columns_list)
         """
+        missing_cols = []
         
-        pg_cursor.execute(query, (schema, table))
-        columns = [row[0] for row in pg_cursor.fetchall()]
-        return columns
+        # Parse requested columns
+        requested = [c.strip() for c in cols.split(',')] if cols else []
         
-    except Exception as e:
-        print(f'.......ERROR retrieving PostGIS columns for {schema}.{table}: {e}')
-        return []
-
-
-def convert_columns_to_uppercase(cols_str):
-    """Convert comma-separated column names to uppercase for Oracle"""
-    if not cols_str or cols_str == '':
-        return ''
-    
-    cols_list = [c.strip().upper() for c in cols_str.split(',')]
-    return ','.join(cols_list)
-
-
-def convert_columns_to_lowercase(cols_str):
-    """Convert comma-separated column names to lowercase for PostGIS"""
-    if not cols_str or cols_str == '':
-        return ''
-    
-    cols_list = [c.strip().lower() for c in cols_str.split(',')]
-    return ','.join(cols_list)
-
-
-def validate_columns(cols, available_cols, item, table, is_postgis=False):
-    """
-    Validates that requested columns exist in the dataset
-    Handles both PostGIS (lowercase) and Oracle (uppercase)
-    """
-    missing_cols = []
-    
-    # Parse comma-separated column string
-    if isinstance(cols, str) and cols:
-        requested = [c.strip() for c in cols.split(',')]
-    else:
-        requested = []
-    
-    # Normalize case based on database type
-    if is_postgis:
-        # PostGIS: convert everything to lowercase
-        requested = [c.lower() for c in requested]
-        available_cols = [c.lower() for c in available_cols]
-        objectid_col = 'objectid'
-        excluded_cols = ['shape', 'geometry']
-    else:
-        # Oracle: convert everything to uppercase
-        requested = [c.upper() for c in requested]
-        available_cols = [c.upper() for c in available_cols]
-        objectid_col = 'OBJECTID'
-        excluded_cols = ['SHAPE', 'GEOMETRY']
-    
-    # Check which columns are missing
-    for col in requested:
-        if col not in available_cols and col != objectid_col:
-            missing_cols.append(col)
-    
-    # If all columns are missing or no columns requested, use fallback
-    if len(missing_cols) == len(requested) or not requested:
-        # First, try to find OBJECTID/objectid
-        if objectid_col in available_cols:
-            print(f'.......WARNING: No valid requested columns, using {objectid_col}')
-            return objectid_col, missing_cols
-        
-        # If OBJECTID doesn't exist, use first available column (excluding geometry columns)
-        valid_available = [col for col in available_cols if col not in excluded_cols]
-        
-        if valid_available:
-            print(f'.......WARNING: No valid requested columns and no {objectid_col}, using {valid_available[0]}')
-            return valid_available[0], missing_cols
+        # Normalize case
+        if is_postgis:
+            requested = [c.lower() for c in requested]
+            available_cols = [c.lower() for c in available_cols]
+            objectid_col = 'objectid'
+            excluded_cols = ['shape', 'geometry']
         else:
-            print(f'.......WARNING: No valid columns available')
-            return objectid_col, missing_cols
-    
-    # Remove missing columns from the list
-    valid_cols = [c for c in requested if c not in missing_cols]
-    
-    if missing_cols:
-        print(f'.......WARNING: Missing columns in {table}: {", ".join(missing_cols)}')
-        print(f'.......Available columns: {", ".join(sorted(available_cols)[:10])}...')  # Show first 10
-    
-    # Return as comma-separated string
-    validated = ','.join(valid_cols) if valid_cols else objectid_col
-    
-    return validated, missing_cols
-
-
-
-def simplify_geometries(gdf, tol=10, preserve_topology=True):
-    """Simplifies geometries in a gdf for webmap display"""
-    gdf = gdf.copy()
-    gdf["geometry"] = gdf.geometry.simplify(tolerance=tol, preserve_topology=preserve_topology)
-    return gdf
-
-
-
-def make_status_map(gdf_aoi, gdf_intr, col_lbl, item, workspace):
-    """Generates HTML Interactive maps of AOI and intersection geodataframes"""
-    m = folium.Map(tiles='openstreetmap')
-    xmin, ymin, xmax, ymax = gdf_aoi.to_crs(4326)['geometry'].total_bounds
-    m.fit_bounds([[ymin, xmin], [ymax, xmax]])
-
-    gdf_aoi.explore(
-         m=m,
-         tooltip=False,
-         style_kwds=dict(fill=False, color="red", weight=3),
-         name="AOI")
-
-    gdf_intr.explore(
-         m=m,
-         column=col_lbl, 
-         tooltip=col_lbl, 
-         popup=True, 
-         cmap="Dark2",  
-         style_kwds=dict(color="gray"),
-         name=item)
-    
-    # Add Google Satellite basemap
-    folium.TileLayer(
-        tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-        attr='Google',
-        name='Google Satellite',
-        overlay=False,
-        control=True
-    ).add_to(m)
-    
-    folium.LayerControl().add_to(m)
-    
-    maps_dir = os.path.join(workspace, 'maps')
-    if not os.path.exists(maps_dir):
-        os.makedirs(maps_dir)
+            requested = [c.upper() for c in requested]
+            available_cols = [c.upper() for c in available_cols]
+            objectid_col = 'OBJECTID'
+            excluded_cols = ['SHAPE', 'GEOMETRY']
         
-    out_html = os.path.join(maps_dir, item + '.html')
-    m.save(out_html)
-
-
-
-def write_xlsx(results, df_stat, workspace):
-    """Writes results to a spreadsheet"""
-    df_res = df_stat[['Category', 'Featureclass_Name(valid characters only)']]   
-    df_res.rename(columns={'Featureclass_Name(valid characters only)': 'item'}, inplace=True)
-    df_res['List of conflicts'] = ""
-    df_res['Map'] = ""
-    
-    expanded_rows = []
-    
-    for index, row in df_res.iterrows():
-        has_conflicts = False
-        for k, v in results.items():
-            if row['item'] == k and v.shape[0] > 0:
-                has_conflicts = True
-                
-                # Handle both RESULT (Oracle) and result (PostGIS) column names
-                result_col_to_drop = None
-                if 'RESULT' in v.columns:
-                    result_col_to_drop = 'RESULT'
-                elif 'result' in v.columns:
-                    result_col_to_drop = 'result'
-                
-                # Drop the result column if it exists
-                if result_col_to_drop:
-                    v = v.drop(result_col_to_drop, axis=1)
-                
-                v['Result'] = v[v.columns].apply(lambda row: '; '.join(row.values.astype(str)), axis=1)
-                
-                for conflict in v['Result'].to_list():
-                    expanded_rows.append({
-                        'Category': row['Category'],
-                        'item': row['item'],
-                        'List of conflicts': str(conflict),
-                        'Map': '=HYPERLINK("{}", "View Map")'.format(os.path.join(workspace, 'maps', k + '.html'))
-                    })
-                break
+        # Check for missing columns
+        for col in requested:
+            if col not in available_cols and col != objectid_col:
+                missing_cols.append(col)
         
-        if not has_conflicts:
-            expanded_rows.append({
-                'Category': row['Category'],
-                'item': row['item'],
-                'List of conflicts': '',
-                'Map': ''
-            })
-    
-    df_res = pd.DataFrame(expanded_rows)
+        # Handle fallback if no valid columns
+        if len(missing_cols) == len(requested) or not requested:
+            if objectid_col in available_cols:
+                print(f'.......WARNING: No valid requested columns, using {objectid_col}')
+                return objectid_col, missing_cols
+            
+            valid_available = [col for col in available_cols if col not in excluded_cols]
+            if valid_available:
+                print(f'.......WARNING: No valid requested columns, using {valid_available[0]}')
+                return valid_available[0], missing_cols
+            else:
+                print('.......WARNING: No valid columns available')
+                return objectid_col, missing_cols
+        
+        # Remove missing columns
+        valid_cols = [c for c in requested if c not in missing_cols]
+        
+        if missing_cols:
+            print(f'.......WARNING: Missing columns in {table}: {", ".join(missing_cols)}')
+            print(f'.......Available columns: {", ".join(sorted(available_cols)[:10])}...')
+        
+        return ','.join(valid_cols) if valid_cols else objectid_col, missing_cols
 
-    filename = os.path.join(workspace, 'AST_lite_TAB3.xlsx')
-    sheetname = 'Conflicts & Constraints'
-    writer = pd.ExcelWriter(filename, engine='xlsxwriter')        
-    df_res.to_excel(writer, sheet_name=sheetname, index=False, startrow=0, startcol=0)
-    
-    workbook = writer.book
-    worksheet = writer.sheets[sheetname]
-    
-    txt_format = workbook.add_format({'text_wrap': True})
-    lnk_format = workbook.add_format({'underline': True, 'font_color': 'blue'})
-    worksheet.set_column(0, 0, 30)
-    worksheet.set_column(1, 1, 60)
-    worksheet.set_column(2, 2, 80, txt_format)
-    worksheet.set_column(3, 3, 20)
-    
-    worksheet.conditional_format('D2:D{}'.format(df_res.shape[0] + 1), 
-                                 {'type': 'cell',
-                                  'criteria': 'equal to', 
-                                  'value': '"View Map"',
-                                  'format': lnk_format})
-    
-    col_names = [{'header': col_name} for col_name in df_res.columns]
-    worksheet.add_table(0, 0, df_res.shape[0] + 1, df_res.shape[1] - 1, {'columns': col_names})
-    
-    writer.close()
 
+# ============================================================================
+# MAP GENERATION
+# ============================================================================
+
+class MapGenerator:
+    """Generates interactive HTML maps."""
+    
+    @staticmethod
+    def create_status_map(
+        gdf_aoi: gpd.GeoDataFrame,
+        gdf_intersect: gpd.GeoDataFrame,
+        label_col: str,
+        item_name: str,
+        workspace: str
+    ) -> None:
+        """
+        Generate interactive HTML map showing AOI and intersecting features.
+        
+        Args:
+            gdf_aoi: AOI GeoDataFrame
+            gdf_intersect: Intersecting features GeoDataFrame
+            label_col: Column to use for labels
+            item_name: Name of dataset item
+            workspace: Output workspace directory
+        """
+        # Create base map
+        m = folium.Map(tiles='openstreetmap')
+        xmin, ymin, xmax, ymax = gdf_aoi.to_crs(4326)['geometry'].total_bounds
+        m.fit_bounds([[ymin, xmin], [ymax, xmax]])
+        
+        # Add AOI layer
+        gdf_aoi.explore(
+            m=m,
+            tooltip=False,
+            style_kwds=dict(fill=False, color="red", weight=3),
+            name="AOI"
+        )
+        
+        # Add intersection layer
+        gdf_intersect.explore(
+            m=m,
+            column=label_col,
+            tooltip=label_col,
+            popup=True,
+            cmap="Dark2",
+            style_kwds=dict(color="gray"),
+            name=item_name
+        )
+        
+        # Add Google Satellite basemap
+        folium.TileLayer(
+            tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+            attr='Google',
+            name='Google Satellite',
+            overlay=False,
+            control=True
+        ).add_to(m)
+        
+        folium.LayerControl().add_to(m)
+        
+        # Save map
+        maps_dir = os.path.join(workspace, 'maps')
+        os.makedirs(maps_dir, exist_ok=True)
+        out_html = os.path.join(maps_dir, f'{item_name}.html')
+        m.save(out_html)
+
+
+# ============================================================================
+# EXCEL REPORT GENERATION
+# ============================================================================
+
+class ExcelReportWriter:
+    """Writes analysis results to Excel format."""
+    
+    @staticmethod
+    def write_report(
+        results: Dict[str, pd.DataFrame],
+        df_stat: pd.DataFrame,
+        workspace: str
+    ) -> None:
+        """
+        Write results to Excel spreadsheet.
+        
+        Args:
+            results: Dictionary of dataset results
+            df_stat: Configuration DataFrame
+            workspace: Output workspace directory
+        """
+        df_res = df_stat[['Category', 'Featureclass_Name(valid characters only)']].copy()
+        df_res.rename(columns={'Featureclass_Name(valid characters only)': 'item'}, inplace=True)
+        df_res['List of conflicts'] = ""
+        df_res['Map'] = ""
+        
+        expanded_rows = []
+        
+        for _, row in df_res.iterrows():
+            has_conflicts = False
+            
+            for item_name, result_df in results.items():
+                if row['item'] == item_name and result_df.shape[0] > 0:
+                    has_conflicts = True
+                    
+                    # Drop result column (case-insensitive)
+                    result_col = None
+                    if 'RESULT' in result_df.columns:
+                        result_col = 'RESULT'
+                    elif 'result' in result_df.columns:
+                        result_col = 'result'
+                    
+                    if result_col:
+                        result_df = result_df.drop(result_col, axis=1)
+                    
+                    # Combine columns into single result string
+                    result_df['Result'] = result_df[result_df.columns].apply(
+                        lambda r: '; '.join(r.values.astype(str)), 
+                        axis=1
+                    )
+                    
+                    # Add row for each conflict
+                    for conflict in result_df['Result'].to_list():
+                        map_path = os.path.join(workspace, 'maps', f'{item_name}.html')
+                        expanded_rows.append({
+                            'Category': row['Category'],
+                            'item': row['item'],
+                            'List of conflicts': str(conflict),
+                            'Map': f'=HYPERLINK("{map_path}", "View Map")'
+                        })
+                    break
+            
+            if not has_conflicts:
+                expanded_rows.append({
+                    'Category': row['Category'],
+                    'item': row['item'],
+                    'List of conflicts': '',
+                    'Map': ''
+                })
+        
+        df_res = pd.DataFrame(expanded_rows)
+        
+        # Write to Excel
+        filename = os.path.join(workspace, 'AST_lite_TAB3.xlsx')
+        sheetname = 'Conflicts & Constraints'
+        
+        with pd.ExcelWriter(filename, engine='xlsxwriter') as writer:
+            df_res.to_excel(writer, sheet_name=sheetname, index=False, startrow=0, startcol=0)
+            
+            workbook = writer.book
+            worksheet = writer.sheets[sheetname]
+            
+            # Format columns
+            txt_format = workbook.add_format({'text_wrap': True})
+            lnk_format = workbook.add_format({'underline': True, 'font_color': 'blue'})
+            
+            worksheet.set_column(0, 0, 30)
+            worksheet.set_column(1, 1, 60)
+            worksheet.set_column(2, 2, 80, txt_format)
+            worksheet.set_column(3, 3, 20)
+            
+            # Conditional formatting for hyperlinks
+            worksheet.conditional_format(
+                f'D2:D{df_res.shape[0] + 1}',
+                {
+                    'type': 'cell',
+                    'criteria': 'equal to',
+                    'value': '"View Map"',
+                    'format': lnk_format
+                }
+            )
+            
+            # Add table
+            col_names = [{'header': col_name} for col_name in df_res.columns]
+            worksheet.add_table(
+                0, 0, df_res.shape[0] + 1, df_res.shape[1] - 1,
+                {'columns': col_names}
+            )
+
+
+# ============================================================================
+# MAIN ANALYSIS ENGINE
+# ============================================================================
+
+class OverlayAnalyzer:
+    """Main engine for running overlay analysis."""
+    
+    def __init__(
+        self,
+        oracle_conn: OracleConnection,
+        postgis_conn: PostGISConnection,
+        sql_queries: Dict[str, str]
+    ):
+        self.oracle_conn = oracle_conn
+        self.postgis_conn = postgis_conn
+        self.sql = sql_queries
+        self.results = {}
+        self.failed_datasets = []
+    
+    def analyze_dataset(
+        self,
+        item_index: int,
+        df_stat: pd.DataFrame,
+        wkb_aoi: bytes,
+        srid: int,
+        gdf_aoi: gpd.GeoDataFrame,
+        workspace: str,
+        region: str
+    ) -> None:
+        """
+        Analyze single dataset for overlaps with AOI.
+        
+        Args:
+            item_index: Row index in config DataFrame
+            df_stat: Configuration DataFrame
+            wkb_aoi: WKB representation of AOI
+            srid: SRID of AOI
+            gdf_aoi: AOI GeoDataFrame
+            workspace: Output workspace directory
+            region: Region name for PostGIS schema
+        """
+        item = df_stat.loc[item_index, 'Featureclass_Name(valid characters only)']
+        
+        try:
+            # Get configuration
+            print('.....getting table and column names')
+            table, cols, col_lbl = DatasetConfig.get_table_columns(item_index, df_stat)
+            
+            print('.....getting definition query (if any)')
+            def_query = DatasetConfig.get_definition_query(item_index, df_stat, for_postgis=False)
+            
+            print('.....getting buffer distance (if any)')
+            radius = DatasetConfig.get_buffer_distance(item_index, df_stat)
+            
+            # Determine if Oracle or PostGIS
+            is_oracle = table.startswith('WHSE') or table.startswith('REG')
+            
+            print('.....running Overlay Analysis.')
+            
+            if is_oracle:
+                df_result = self._analyze_oracle_dataset(
+                    table, cols, col_lbl, def_query, radius, wkb_aoi, srid
+                )
+            else:
+                df_result = self._analyze_postgis_dataset(
+                    table, cols, col_lbl, def_query, radius, wkb_aoi, srid, region
+                )
+            
+            # Process results
+            if isinstance(cols, str):
+                cols_list = [c.strip() for c in cols.split(",")]
+            else:
+                cols_list = cols
+            
+            # Handle result column - uppercase for Oracle, lowercase for PostGIS
+            if is_oracle:
+                result_col = 'RESULT'
+            else:
+                result_col = 'result'
+            
+            if result_col in df_result.columns:
+                cols_list.append(result_col)
+            
+            # Build final column list
+            available_result_cols = [col for col in cols_list if col in df_result.columns]
+            
+            if not available_result_cols and not df_result.empty:
+                print(f'.......WARNING: No valid columns found in results for {item}')
+                self.results[item] = pd.DataFrame([])
+                return
+            
+            if not df_result.empty:
+                df_all_res = df_result[available_result_cols]
+            else:
+                df_all_res = df_result
+            
+            ov_nbr = df_all_res.shape[0]
+            print(f'.....number of overlaps: {ov_nbr}')
+            
+            # Store results
+            self.results[item] = df_all_res
+            
+            # Generate map if overlaps found
+            if ov_nbr > 0:
+                self._generate_map(df_result, gdf_aoi, cols, col_lbl, item, workspace, is_oracle)
+        
+        except Exception as e:
+            print(f'.......ERROR processing dataset {item}: {e}')
+            self.failed_datasets.append({'item': item, 'reason': str(e)})
+            self.results[item] = pd.DataFrame([])
+    
+    def _analyze_oracle_dataset(
+        self,
+        table: str,
+        cols: str,
+        col_lbl: str,
+        def_query: str,
+        radius: int,
+        wkb_aoi: bytes,
+        srid: int
+    ) -> pd.DataFrame:
+        """Analyze Oracle/BCGW dataset."""
+        conn, cursor = self.oracle_conn.connection, self.oracle_conn.cursor
+        
+        # Get geometry column
+        geom_col = OracleUtils.get_geometry_column(conn, cursor, table, self.sql['geomCol'])
+        
+        # Get SRID
+        srid_t = OracleUtils.get_srid(conn, cursor, table, geom_col, self.sql['srid'])
+        if srid_t is None:
+            print(f'.......SKIPPING dataset - table is empty')
+            raise Exception('Table is empty')
+        
+        # Validate columns
+        print('.....validating columns')
+        available_cols = OracleUtils.get_columns(conn, cursor, table)
+        if not available_cols:
+            print(f'.......SKIPPING dataset - could not retrieve table columns')
+            raise Exception('Could not retrieve table columns')
+        
+        cols_upper = ColumnValidator.convert_to_uppercase(cols)
+        validated_cols, _ = ColumnValidator.validate_columns(
+            cols_upper, available_cols, table, table, is_postgis=False
+        )
+        
+        # Clean up def_query - ensure it starts with AND if not empty
+        clean_def_query = def_query.strip()
+        if clean_def_query and not clean_def_query.upper().startswith('AND'):
+            clean_def_query = 'AND ' + clean_def_query
+        
+        # Build query
+        query = self.sql['oracle_overlay'].format(
+            cols=validated_cols,
+            tab=table,
+            radius=radius,
+            geom_col=geom_col,
+            def_query=clean_def_query
+        )
+        
+        # Handle coordinate transformation
+        srid_mismatch = (srid_t == 1000003005)
+        if srid_mismatch:
+            query = OracleUtils.apply_coordinate_transform(query, geom_col, srid_t)
+            bind_vars = {'wkb_aoi': wkb_aoi, 'srid': int(srid), 'srid_t': int(srid_t)}
+        else:
+            bind_vars = {'wkb_aoi': wkb_aoi, 'srid': int(srid)}
+        
+        cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
+        
+        # Apply geometry validation
+        query = OracleUtils.apply_geometry_validation(query, table, geom_col)
+        
+        # Execute query
+        df_all = read_query(conn, cursor, query, bind_vars)
+        
+        return df_all
+    
+    def _analyze_postgis_dataset(
+        self,
+        table: str,
+        cols: str,
+        col_lbl: str,
+        def_query: str,
+        radius: int,
+        wkb_aoi: bytes,
+        srid: int,
+        region: str
+    ) -> pd.DataFrame:
+        """Analyze PostGIS dataset."""
+        conn, cursor = self.postgis_conn.connection, self.postgis_conn.cursor
+        
+        # Get table name
+        table_name = PostGISUtils.get_table_name_from_datasource(table)
+        schema = region.lower()
+        
+        print(f'.......Using PostGIS table: {schema}.{table_name}')
+        
+        # Check if table exists
+        print('.....checking if table exists in PostGIS')
+        if not PostGISUtils.table_exists(cursor, schema, table_name):
+            print(f'.......SKIPPING dataset - table {schema}.{table_name} not found in PostGIS')
+            raise Exception(f'Table not found in PostGIS: {schema}.{table_name}')
+        
+        # Validate columns
+        print('.....validating columns')
+        available_cols = PostGISUtils.get_columns(conn, cursor, schema, table_name)
+        if not available_cols:
+            print(f'.......SKIPPING dataset - table exists but no columns found')
+            raise Exception(f'No columns found in PostGIS table {schema}.{table_name}')
+        
+        cols_lower = ColumnValidator.convert_to_lowercase(cols)
+        validated_cols, _ = ColumnValidator.validate_columns(
+            cols_lower, available_cols, table_name, f'{schema}.{table_name}', is_postgis=True
+        )
+        
+        # Get PostGIS definition query - don't wrap it again, just clean it
+        df_temp = pd.DataFrame([{'Definition_Query': def_query if def_query.strip() else 'nan'}])
+        pg_def_query_raw = DatasetConfig.get_definition_query(0, df_temp, for_postgis=True)
+        
+        # Remove the "AND " prefix if it was added, we'll add it in the query template
+        pg_def_query = pg_def_query_raw.replace('AND (', '(').replace('AND(', '(') if pg_def_query_raw else ''
+        
+        # Only add the AND prefix if there's actually a query
+        if pg_def_query and pg_def_query.strip():
+            pg_def_query = 'AND ' + pg_def_query
+        
+        # Build query
+        query = self.sql['postgis_overlay'].format(
+            cols=validated_cols,
+            schema=schema,
+            table=table_name,
+            def_query=pg_def_query
+        )
+        
+        # Execute query
+        try:
+            cursor.execute(query, (
+                psycopg2.Binary(wkb_aoi),
+                int(srid),
+                str(radius),
+                psycopg2.Binary(wkb_aoi),
+                int(srid),
+                float(radius)
+            ))
+            
+            # Fetch results
+            names = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            df_all = pd.DataFrame(rows, columns=names)
+            
+            return df_all
+            
+        except psycopg2.Error as e:
+            print(f'.......ERROR: PostGIS query failed: {e}')
+            # Rollback the transaction to recover from error state
+            try:
+                cursor.connection.rollback()
+            except:
+                pass
+            raise Exception(f'PostGIS query error: {str(e)}')
+    
+    def _generate_map(
+        self,
+        df_result: pd.DataFrame,
+        gdf_aoi: gpd.GeoDataFrame,
+        cols: str,
+        col_lbl: str,
+        item: str,
+        workspace: str,
+        is_oracle: bool
+    ) -> None:
+        """Generate map for dataset with overlaps."""
+        print('.....generating a map.')
+        
+        # Check if DataFrame has geometry before converting
+        if df_result.empty:
+            print('.......WARNING: Cannot create map - no results')
+            return
+        
+        # Check for geometry column
+        has_geom = False
+        if is_oracle and 'SHAPE' in df_result.columns:
+            has_geom = True
+        elif not is_oracle and 'shape' in df_result.columns:
+            has_geom = True
+        
+        if not has_geom:
+            print('.......WARNING: Cannot create map - no geometry column in results')
+            return
+        
+        # Convert to GeoDataFrame
+        try:
+            gdf_intersect = GeometryProcessor.df_to_gdf(df_result, 3005)
+        except Exception as e:
+            print(f'.......WARNING: Cannot create map - geometry conversion failed: {e}')
+            return
+        
+        # Determine label column
+        cols_list = [c.strip() for c in cols.split(',') if c.strip()]
+        if is_oracle:
+            col_lbl_use = col_lbl.upper() if col_lbl != 'nan' else (cols_list[0].upper() if cols_list else 'OBJECTID')
+        else:
+            col_lbl_use = col_lbl.lower() if col_lbl != 'nan' else (cols_list[0].lower() if cols_list else 'objectid')
+        
+        if col_lbl_use not in gdf_intersect.columns:
+            # Fallback to first available column (excluding geometry)
+            available_cols = [c for c in gdf_intersect.columns if c not in ['geometry', 'SHAPE', 'shape']]
+            if available_cols:
+                col_lbl_use = available_cols[0]
+            else:
+                print('.......WARNING: No valid label column found for map')
+                return
+        
+        # Convert label column to string
+        if col_lbl_use in gdf_intersect.columns:
+            gdf_intersect[col_lbl_use] = gdf_intersect[col_lbl_use].astype(str)
+        
+        # Convert datetime columns
+        for col in gdf_intersect.columns:
+            if gdf_intersect[col].dtype == 'datetime64[ns]':
+                gdf_intersect[col] = gdf_intersect[col].astype(str)
+        
+        # Simplify and create map
+        gdf_intersect_s = GeometryProcessor.simplify_geometries(gdf_intersect, tolerance=10)
+        MapGenerator.create_status_map(gdf_aoi, gdf_intersect_s, col_lbl_use, item, workspace)
+
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+def main():
+    """Execute the AST lite process."""
+    start_time = timeit.default_timer()
+    
+    # Configuration
+    workspace = r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework"
+    wksp_xls = os.path.join(workspace, 'input_spreadsheets')
+    aoi = os.path.join(workspace, 'test_data', 'aoi_test_2.shp')
+    out_wksp = os.path.join(workspace, 'outputs')
+    
+    # User inputs
+    input_src = 'AOI'  # Options: 'TANTALIS' or 'AOI'
+    region = 'cariboo'
+    
+    # TANTALIS parameters (if input_src == 'TANTALIS')
+    file_nbr = '5408057'
+    disp_id = 943829
+    prcl_id = 977043
+    
+    oracle_conn = None
+    postgis_conn = None
+    
+    try:
+        # Connect to databases
+        print('Connecting to BCGW.')
+        hostname = 'bcgw.bcgov/idwprod1.bcgov'
+        bcgw_user = os.getenv('bcgw_user')
+        bcgw_pwd = os.getenv('bcgw_pwd')
+        oracle_conn = OracleConnection(bcgw_user, bcgw_pwd, hostname)
+        
+        print('\nConnecting to PostGIS.')
+        pg_host = 'localhost'
+        pg_database = 'ast_local_datasets'
+        pg_user = 'postgres'
+        pg_pwd = os.getenv('PG_LCL_SUSR_PASS')
+        postgis_conn = PostGISConnection(pg_host, pg_database, pg_user, pg_pwd)
+        
+        # Load SQL queries
+        print('\nLoading SQL queries')
+        sql = load_sql_queries()
+        
+        # Get AOI
+        print('\nReading User inputs: AOI.')
+        if input_src == 'AOI':
+            print('....Reading the AOI file')
+            gdf_aoi = GeometryProcessor.esri_to_gdf(aoi)
+        elif input_src == 'TANTALIS':
+            print(f'....input File Number: {file_nbr}')
+            print(f'....input Disposition ID: {disp_id}')
+            print(f'....input Parcel ID: {prcl_id}')
+            
+            bind_vars = {
+                'file_nbr': file_nbr,
+                'disp_id': disp_id,
+                'parcel_id': prcl_id
+            }
+            
+            print('....Querying TANTALIS for AOI geometry')
+            df_aoi = read_query(
+                oracle_conn.connection,
+                oracle_conn.cursor,
+                sql['aoi'],
+                bind_vars
+            )
+            
+            if df_aoi.shape[0] < 1:
+                raise Exception('Parcel not in TANTALIS. Please check inputs!')
+            
+            print('....Converting TANTALIS result to GeoDataFrame')
+            gdf_aoi = GeometryProcessor.df_to_gdf(df_aoi, 3005)
+        else:
+            raise ValueError('input_src must be "TANTALIS" or "AOI"')
+        
+        # Process multipart AOI
+        if gdf_aoi.shape[0] > 1:
+            print('....Converting multipart AOI to singlepart')
+            gdf_aoi = GeometryProcessor.multipart_to_singlepart(gdf_aoi)
+        
+        # Extract WKB and SRID
+        print('....Extracting WKB and SRID from AOI')
+        wkb_aoi, srid = GeometryProcessor.get_wkb_srid(gdf_aoi)
+        
+        # Read configuration
+        print('\nReading the AST datasets spreadsheet.')
+        print(f'....Region is {region}')
+        df_stat = DatasetConfig.read_spreadsheets(wksp_xls, region)
+        
+        # Run analysis
+        print('\nRunning the analysis.')
+        analyzer = OverlayAnalyzer(oracle_conn, postgis_conn, sql)
+        
+        item_count = df_stat.shape[0]
+        counter = 1
+        
+        for index in df_stat.index:
+            item = df_stat.loc[index, 'Featureclass_Name(valid characters only)']
+            print(f'\n****working on item {counter} of {item_count}: {item}***')
+            
+            analyzer.analyze_dataset(index, df_stat, wkb_aoi, srid, gdf_aoi, out_wksp, region)
+            counter += 1
+        
+        # Write results
+        print('\nWriting Results to spreadsheet')
+        ExcelReportWriter.write_report(analyzer.results, df_stat, out_wksp)
+        
+        # Print summary
+        if analyzer.failed_datasets:
+            print('\n' + '=' * 80)
+            print('SUMMARY: The following datasets failed to process:')
+            print('=' * 80)
+            for failed in analyzer.failed_datasets:
+                print(f"  - {failed['item']}")
+                print(f"    Reason: {failed['reason']}")
+            print(f'\nTotal failed: {len(analyzer.failed_datasets)} out of {item_count}')
+            print('=' * 80)
+        else:
+            print('\n' + '=' * 80)
+            print('SUCCESS: All datasets processed without errors!')
+            print('=' * 80)
+    
+    finally:
+        # Clean up connections
+        if oracle_conn:
+            oracle_conn.close()
+            print('\nOracle connection closed.')
+        if postgis_conn:
+            postgis_conn.close()
+            print('PostGIS connection closed.')
+    
+    # Print timing
+    finish_time = timeit.default_timer()
+    elapsed_sec = round(finish_time - start_time)
+    mins = int(elapsed_sec / 60)
+    secs = int(elapsed_sec % 60)
+    print(f'\nProcessing Completed in {mins} minutes and {secs} seconds')
 
 
 if __name__ == "__main__":
-    """Executes the AST light process"""
-    start_t = timeit.default_timer()
-    
-    # Paths
-    workspace = r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework"
-    wksp_xls = os.path.join(workspace, 'input_spreadsheets')
-    aoi = os.path.join(workspace, 'test_data', 'aoi_test_4.shp')
-    out_wksp = os.path.join(workspace, 'outputs')
-    
-    # Oracle connection
-    print('Connecting to BCGW.')
-    hostname = 'bcgw.bcgov/idwprod1.bcgov'
-    bcgw_user = os.getenv('bcgw_user')
-    bcgw_pwd = os.getenv('bcgw_pwd')
-    connection, cursor = connect_to_Oracle(bcgw_user, bcgw_pwd, hostname)
-    
-    # PostGIS connection
-    print('\nConnecting to PostGIS.')
-    pg_host = 'localhost'
-    pg_database = 'ast_local_datasets'
-    pg_user = 'postgres'
-    pg_pwd = os.getenv('PG_LCL_SUSR_PASS')
-    pg_port = 5432
-    pg_connection, pg_cursor = connect_to_PostGIS(pg_host, pg_database, pg_user, pg_pwd, pg_port)
-    
-    print('\nLoading SQL queries')
-    sql = load_queries()
-    
-    print('\nReading User inputs: AOI.')
-    input_src = 'TANTALIS'  ####### USER INPUT ####### Possible values are "TANTALIS" and AOI
-
-
-    if input_src == 'AOI':
-        print('....Reading the AOI file')
-        gdf_aoi = esri_to_gdf(aoi)
-       
-    elif input_src == 'TANTALIS':
-        fileNbr = '8015096'
-        dispID = 953116
-        prclID = 989206
-     
-        in_fileNbr = fileNbr
-        in_dispID = dispID
-        in_prclID = prclID
-        print('....input File Number: {}'.format(in_fileNbr))
-        print('....input Disposition ID: {}'.format(in_dispID))
-        print('....input Parcel ID: {}'.format(in_prclID))
-        
-        bvars_aoi = {'file_nbr': in_fileNbr, 'disp_id': in_dispID, 'parcel_id': in_prclID}
-        
-        print('....Querying TANTALIS for AOI geometry')
-        df_aoi = read_query(connection, cursor, sql['aoi'], bvars_aoi) 
-        
-        if df_aoi.shape[0] < 1:
-            raise Exception('Parcel not in TANTALIS. Please check inputs!')
-        else:
-            print('....Converting TANTALIS result to GeoDataFrame')
-            gdf_aoi = df_2_gdf(df_aoi, 3005)
-               
-    else:
-        raise Exception('Possible input sources are TANTALIS and AOI!')
-    
-    if gdf_aoi.shape[0] > 1:
-        print('....Converting multipart AOI to singlepart AOI')
-        gdf_aoi = multipart_to_singlepart(gdf_aoi)
-    
-    print('....Extracting WKB and SRID from AOI')
-    wkb_aoi, srid = get_wkb_srid(gdf_aoi)
-    
-    print('\nReading the AST datasets spreadsheet.')
-    region = 'northeast'   ####### USER INPUT #######
-    print('....Region is {}'.format(region))
-    df_stat = read_input_spreadsheets(wksp_xls, region)
-    
-    print('\nRunning the analysis.')
-    results = {}
-    failed_datasets = []
-    
-    item_count = df_stat.shape[0]
-    counter = 1
-    
-    for index, row in df_stat.iterrows():
-        item = row['Featureclass_Name(valid characters only)']
-        item_index = index
-        
-        print('\n****working on item {} of {}: {}***'.format(counter, item_count, item))
-        
-        try:
-            print('.....getting table and column names')
-            table, cols, col_lbl = get_table_cols(item_index, df_stat)
-
-            print('.....getting definition query (if any)')
-            def_query = get_def_query(item_index, df_stat, for_postgis=False)
-        
-            print('.....getting buffer distance (if any)')
-            radius = get_radius(item_index, df_stat)  
-            
-            # This will hold the final validated columns
-            validated_cols = cols
-
-            print('.....running Overlay Analysis.')
-            
-            if table.startswith('WHSE') or table.startswith('REG'): 
-                # Handle Oracle datasets
-                geomQuery = sql['geomCol']
-                sridQuery = sql['srid']
-                geom_col = get_geom_colname(connection, cursor, table, geomQuery)
-                
-                srid_t = get_geom_srid(connection, cursor, table, geom_col, sridQuery)
-                
-                if srid_t is None:
-                    print(f'.......SKIPPING dataset {item} - table is empty')
-                    failed_datasets.append({'item': item, 'reason': 'Empty table'})
-                    results[item] = pd.DataFrame([])
-                    counter += 1
-                    continue
-                
-                print('.....validating columns')
-                available_cols = get_oracle_columns(connection, cursor, table)
-                
-                if not available_cols:
-                    print(f'.......SKIPPING dataset {item} - could not retrieve table columns')
-                    failed_datasets.append({'item': item, 'reason': 'Could not retrieve table columns'})
-                    results[item] = pd.DataFrame([])
-                    counter += 1
-                    continue
-                
-                # Convert requested columns to uppercase for Oracle
-                cols_uppercase = convert_columns_to_uppercase(cols)
-                col_lbl_uppercase = col_lbl.upper() if col_lbl != 'nan' else 'nan'
-                
-                # Validate with uppercase columns
-                validated_cols, missing_cols = validate_columns(cols_uppercase, available_cols, item, table, is_postgis=False)
-                
-                # REMOVED: Don't add to failed_datasets for missing columns
-                # Missing columns are warnings - the query will still run with available columns
-                
-                # Build the base query with validated columns
-                query = sql['oracle_overlay'].format(
-                    cols=validated_cols, tab=table, radius=radius,
-                    geom_col=geom_col, def_query=def_query)
-                
-                # Check if coordinate transformation is needed
-                srid_mismatch = (srid_t == 1000003005)
-                
-                if srid_mismatch:
-                    query = apply_coordinate_transform(query, geom_col, srid_t)
-                    cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
-                    bvars_intr = {'wkb_aoi': wkb_aoi, 'srid': int(srid), 'srid_t': int(srid_t)}
-                else:
-                    cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
-                    bvars_intr = {'wkb_aoi': wkb_aoi, 'srid': int(srid)}
-                
-                # Apply geometry validation filter if needed
-                query = filter_invalid_oracle_geom(query, table, geom_col)
-                
-                df_all = read_query(connection, cursor, query, bvars_intr)
-                    
-            else:
-                # Handle PostGIS datasets
-                try:
-                    # Get cleaned table name from datasource
-                    table_name = get_table_name_from_datasource(table)
-                    schema = region.lower()
-                    
-                    print(f'.......Using PostGIS table: {schema}.{table_name}')
-                    
-                    # First check if table exists
-                    print('.....checking if table exists in PostGIS')
-                    table_exists = check_postgis_table_exists(pg_cursor, schema, table_name)
-                    
-                    if not table_exists:
-                        print(f'.......SKIPPING dataset {item} - table {schema}.{table_name} not found in PostGIS')
-                        failed_datasets.append({'item': item, 'reason': f'Table not found in PostGIS: {schema}.{table_name}'})
-                        results[item] = pd.DataFrame([])
-                        counter += 1
-                        continue
-                    
-                    # Validate columns exist in PostGIS table
-                    print('.....validating columns')
-                    available_cols = get_postgis_columns(pg_connection, pg_cursor, schema, table_name)
-                    
-                    if not available_cols:
-                        print(f'.......SKIPPING dataset {item} - table exists but no columns found')
-                        failed_datasets.append({'item': item, 'reason': f'No columns found in PostGIS table {schema}.{table_name}'})
-                        results[item] = pd.DataFrame([])
-                        counter += 1
-                        continue
-
-                    # Convert requested columns to lowercase for PostGIS
-                    cols_lowercase = convert_columns_to_lowercase(cols)
-                    col_lbl_lowercase = col_lbl.lower() if col_lbl != 'nan' else 'nan'
-                    
-                    # Validate with lowercase columns
-                    validated_cols, missing_cols = validate_columns(cols_lowercase, available_cols, item, table_name, is_postgis=True)
-                    
-                    # REMOVED: Don't add to failed_datasets for missing columns
-                    # Missing columns are warnings - the query will still run with available columns
-                    
-                    # Get definition query for PostGIS (already handles lowercase)
-                    pg_def_query = get_def_query(item_index, df_stat, for_postgis=True)
-                    
-                    # Build PostGIS overlay query
-                    query = sql['postgis_overlay'].format(
-                        cols=validated_cols,
-                        schema=schema,
-                        table=table_name,
-                        def_query=pg_def_query
-                    )
-
-                    # Execute PostGIS query
-                    pg_cursor.execute(query, (
-                        psycopg2.Binary(wkb_aoi), 
-                        int(srid), 
-                        str(radius),
-                        psycopg2.Binary(wkb_aoi), 
-                        int(srid), 
-                        float(radius)
-                    ))
-                    
-                    # Fetch results
-                    names = [desc[0] for desc in pg_cursor.description]
-                    rows = pg_cursor.fetchall()
-                    df_all = pd.DataFrame(rows, columns=names)
-                    
-                except psycopg2.Error as e:
-                    print(f'.......ERROR: PostGIS query failed: {e}')
-                    failed_datasets.append({'item': item, 'reason': f'PostGIS query error: {str(e)}'})
-                    results[item] = pd.DataFrame([])
-                    counter += 1
-                    continue
-                except Exception as e:
-                    print(f'.......ERROR: Could not process PostGIS dataset: {str(e)}')
-                    failed_datasets.append({'item': item, 'reason': f'PostGIS dataset error: {str(e)}'})
-                    results[item] = pd.DataFrame([])
-                    counter += 1
-                    continue
-
-            # Process results (common for both Oracle and PostGIS)
-            if isinstance(validated_cols, str):
-                cols_list = [c.strip() for c in validated_cols.split(",")]
-            else:
-                cols_list = validated_cols
-
-            # Handle result column - uppercase for Oracle, lowercase for PostGIS
-            if table.startswith('WHSE') or table.startswith('REG'):
-                result_col = 'RESULT'
-                col_lbl_to_use = col_lbl_uppercase if col_lbl != 'nan' else 'nan'
-            else:
-                result_col = 'result'
-                col_lbl_to_use = col_lbl_lowercase if col_lbl != 'nan' else 'nan'
-
-            if result_col in df_all.columns:
-                cols_list.append(result_col)
-            else:
-                print(f'.......WARNING: {result_col} column not found in results')
-
-            # Build the final column list
-            available_result_cols = [col for col in cols_list if col in df_all.columns]
-
-            if not available_result_cols:
-                print(f'.......WARNING: No valid columns found in results for {item}')
-                results[item] = pd.DataFrame([])
-                counter += 1
-                continue
-
-            df_all_res = df_all[available_result_cols] 
-
-            ov_nbr = df_all_res.shape[0]
-            print('.....number of overlaps: {}'.format(ov_nbr))
-
-            results[item] = df_all_res
-
-            if ov_nbr > 0:
-                print('.....generating a map.')
-                gdf_intr = df_2_gdf(df_all, 3005)
-                
-                # Use appropriate case for col_lbl
-                if col_lbl_to_use == 'nan': 
-                    col_lbl_final = cols_list[0]
-                else:
-                    col_lbl_final = col_lbl_to_use
-                
-                if col_lbl_final in gdf_intr.columns:
-                    gdf_intr[col_lbl_final] = gdf_intr[col_lbl_final].astype(str)
-                else:
-                    # Fallback: use first available column
-                    col_lbl_final = cols_list[0]
-                    if col_lbl_final in gdf_intr.columns:
-                        gdf_intr[col_lbl_final] = gdf_intr[col_lbl_final].astype(str)
-                
-                for col in gdf_intr.columns:
-                    if gdf_intr[col].dtype == 'datetime64[ns]':
-                        gdf_intr[col] = gdf_intr[col].astype(str)
-                
-                gdf_intr_s = simplify_geometries(gdf_intr, tol=10, preserve_topology=True)
-                make_status_map(gdf_aoi, gdf_intr_s, col_lbl_final, item, out_wksp)
-
-        except Exception as e:
-            print(f'.......ERROR processing dataset {item}: {e}')
-            failed_datasets.append({'item': item, 'reason': str(e)})
-            results[item] = pd.DataFrame([])
-        
-        counter += 1
-    
-    print('\nWriting Results to spreadsheet')
-    write_xlsx(results, df_stat, out_wksp)
-    
-    # Close PostGIS connection
-    pg_cursor.close()
-    pg_connection.close()
-    
-    # Print summary
-    if failed_datasets:
-        print('\n' + '='*80)
-        print('SUMMARY: The following datasets failed to process:')
-        print('='*80)
-        for failed in failed_datasets:
-            print(f"  - {failed['item']}")
-            print(f"    Reason: {failed['reason']}")
-        print(f'\nTotal failed datasets: {len(failed_datasets)} out of {item_count}')
-        print('='*80)
-    else:
-        print('\n' + '='*80)
-        print('SUCCESS: All datasets processed without errors!')
-        print('='*80)
-    
-    finish_t = timeit.default_timer()
-    t_sec = round(finish_t - start_t)
-    mins = int(t_sec / 60)
-    secs = int(t_sec % 60)
-    print('\nProcessing Completed in {} minutes and {} seconds'.format(mins, secs))
+    main()
