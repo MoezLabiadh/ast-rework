@@ -1264,7 +1264,7 @@ def main():
     out_wksp = os.path.join(workspace, 'outputs')
     
     # User inputs
-    input_src = 'AOI'  # Options: 'TANTALIS' or 'AOI'
+    input_src = 'TANTALIS'  # Options: 'TANTALIS' or 'AOI'
     region = 'cariboo'
     
     # TANTALIS parameters (if input_src == 'TANTALIS')
