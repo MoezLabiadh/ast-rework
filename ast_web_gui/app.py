@@ -425,6 +425,11 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
     if not n_clicks:
         return None, False, True, True
     
+    # Use environment variables if form fields are empty
+    bcgw_user = bcgw_user or os.getenv('bcgw_user')
+    bcgw_pwd = bcgw_pwd or os.getenv('bcgw_pwd')
+    pg_pwd = pg_pwd or os.getenv('PG_LCL_SUSR_PASS')
+    
     # Validate inputs
     if not bcgw_user or not bcgw_pwd:
         return None, False, True, True
@@ -454,6 +459,7 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
         'input_source': input_source,
         'region': region,
         'workspace': workspace,
+        'workspace_xls': os.getenv('WORKSPACE_XLS', r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets'),
         'bcgw': {
             'username': bcgw_user,
             'password': bcgw_pwd,
