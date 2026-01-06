@@ -83,20 +83,30 @@ def create_connection_card():
             "Database Connections"
         ]),
         dbc.CardBody([
+            dbc.Alert(
+                [
+                    html.I(className="fas fa-info-circle me-2"),
+                    "Your credentials are only used for this session and are never stored."
+                ],
+                color="info",
+                className="mb-3"
+            ),
             dbc.Row([
                 dbc.Col([
                     html.Label("BCGW/Oracle Connection", className="fw-bold"),
                     dbc.Input(
                         id="bcgw-username",
-                        placeholder="Username",
+                        placeholder="Username *",
                         type="text",
-                        className="mb-2"
+                        className="mb-2",
+                        required=True
                     ),
                     dbc.Input(
                         id="bcgw-password",
-                        placeholder="Password",
+                        placeholder="Password *",
                         type="password",
-                        className="mb-2"
+                        className="mb-2",
+                        required=True
                     ),
                     dbc.Input(
                         id="bcgw-hostname",
@@ -130,11 +140,14 @@ def create_connection_card():
                     ),
                     dbc.Input(
                         id="postgis-password",
-                        placeholder="Password",
-                        type="password"
+                        placeholder="Password *",
+                        value="admin",
+                        type="password",
+                        required=True
                     ),
                 ], md=6),
-            ])
+            ]),
+            html.Small("* Required fields", className="text-muted")
         ])
     ], className="mb-4")
 
@@ -228,7 +241,7 @@ def create_input_card():
                     dbc.Input(
                         id="workspace",
                         placeholder="Path to workspace directory",
-                        value="W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\outputs\APP",
+                        value=r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\outputs\APP",
                         type="text"
                     )
                 ], md=6),
@@ -400,7 +413,8 @@ def handle_file_upload(contents, filenames):
     [Output("job-id", "data"),
      Output("run-button", "disabled"),
      Output("cancel-button", "disabled"),
-     Output("progress-interval", "disabled")],
+     Output("progress-interval", "disabled"),
+     Output("progress-container", "children")],
     Input("run-button", "n_clicks"),
     [State("input-source", "value"),
      State("file-number", "value"),
@@ -423,23 +437,49 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
                    bcgw_host, pg_host, pg_db, pg_user, pg_pwd):
     """Start the AST analysis in a background thread."""
     if not n_clicks:
-        return None, False, True, True
+        initial_progress = [
+            dbc.Progress(id="progress-bar", value=0, striped=True, animated=True, className="mb-3"),
+            html.Div(id="progress-text", children="Ready to start", className="text-muted"),
+            html.Div(id="dataset-status", className="mt-3")
+        ]
+        return None, False, True, True, initial_progress
     
-    # Use environment variables if form fields are empty
-    bcgw_user = bcgw_user or os.getenv('bcgw_user')
-    bcgw_pwd = bcgw_pwd or os.getenv('bcgw_pwd')
-    pg_pwd = pg_pwd or os.getenv('PG_LCL_SUSR_PASS')
+    # Validate credentials
+    validation_errors = []
     
-    # Validate inputs
-    if not bcgw_user or not bcgw_pwd:
-        return None, False, True, True
+    if not bcgw_user or not bcgw_user.strip():
+        validation_errors.append("BCGW Username is required")
+    if not bcgw_pwd or not bcgw_pwd.strip():
+        validation_errors.append("BCGW Password is required")
+    if not pg_pwd or not pg_pwd.strip():
+        validation_errors.append("PostGIS Password is required")
     
+    # Validate input-specific requirements
     if input_source == "TANTALIS":
-        if not file_number or not disp_id or not parcel_id:
-            return None, False, True, True
+        if not file_number or not file_number.strip():
+            validation_errors.append("File Number is required")
+        if not disp_id:
+            validation_errors.append("Disposition ID is required")
+        if not parcel_id:
+            validation_errors.append("Parcel ID is required")
     else:
         if not uploaded_files:
-            return None, False, True, True
+            validation_errors.append("Please upload a shapefile")
+    
+    # Show validation errors
+    if validation_errors:
+        error_alert = dbc.Alert([
+            html.H5("Please fix the following errors:", className="alert-heading"),
+            html.Ul([html.Li(error) for error in validation_errors])
+        ], color="danger", className="mb-3")
+        
+        initial_progress = [
+            dbc.Progress(id="progress-bar", value=0, striped=True, className="mb-3"),
+            html.Div(id="progress-text", children="Please provide required information", className="text-muted"),
+            html.Div(id="dataset-status", className="mt-3"),
+            error_alert
+        ]
+        return None, False, True, True, initial_progress
     
     # Create job
     job_id = str(uuid.uuid4())
@@ -459,7 +499,7 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
         'input_source': input_source,
         'region': region,
         'workspace': workspace,
-        'workspace_xls': os.getenv('WORKSPACE_XLS', r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets'),
+        'workspace_xls': r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets',
         'bcgw': {
             'username': bcgw_user,
             'password': bcgw_pwd,
@@ -491,7 +531,13 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
     )
     thread.start()
     
-    return job_id, True, False, False
+    success_progress = [
+        dbc.Progress(id="progress-bar", value=0, striped=True, animated=True, className="mb-3"),
+        html.Div(id="progress-text", children="Starting analysis...", className="text-muted"),
+        html.Div(id="dataset-status", className="mt-3")
+    ]
+    
+    return job_id, True, False, False, success_progress
 
 
 @app.callback(
