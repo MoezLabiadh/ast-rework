@@ -23,6 +23,7 @@ from flask import Flask, send_file, request
 import plotly.graph_objects as go
 
 # Import the AST processing functions
+# (You'll need to refactor the original script slightly - see below)
 from ast_processor import ASTProcessor
 
 # ============================================================================
@@ -211,7 +212,8 @@ def create_input_card():
                         'borderStyle': 'dashed',
                         'borderRadius': '10px',
                         'textAlign': 'center',
-                        'backgroundColor': '#f8f9fa'
+                        'backgroundColor': '#f8f9fa',
+                        'marginBottom': '15px'
                     },
                     multiple=True
                 ),
@@ -590,6 +592,7 @@ def create_results_display(results, job_id):
     
     # Summary statistics
     total_conflicts = sum(results.get('conflict_counts', {}).values())
+    failed_count = results.get('failed_datasets', 0)
     
     summary_cards = dbc.Row([
         dbc.Col([
@@ -611,7 +614,7 @@ def create_results_display(results, job_id):
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H3(results.get('failed_datasets', 0), className="text-warning"),
+                    html.H3(failed_count, className="text-warning"),
                     html.P("Failed Datasets", className="mb-0")
                 ])
             ])
@@ -632,6 +635,28 @@ def create_results_display(results, job_id):
         ])
     ], className="mb-4")
     
+    # Failed datasets details
+    failed_details = None
+    if failed_count > 0 and 'failed_details' in results:
+        failed_items = []
+        for failed in results['failed_details']:
+            failed_items.append(
+                html.Li([
+                    html.Strong(failed['item']),
+                    html.Br(),
+                    html.Small(f"Reason: {failed['reason']}", className="text-muted")
+                ], className="mb-2")
+            )
+        
+        failed_details = dbc.Alert([
+            html.H5([
+                html.I(className="fas fa-exclamation-triangle me-2"),
+                "Failed Datasets Details"
+            ], className="alert-heading"),
+            html.Hr(),
+            html.Ul(failed_items, className="mb-0")
+        ], color="warning", className="mb-4")
+    
     # Conflict details
     if total_conflicts > 0 and 'conflicts_by_category' in results:
         conflict_details = html.Div([
@@ -649,7 +674,12 @@ def create_results_display(results, job_id):
     else:
         conflict_details = dbc.Alert("No conflicts detected", color="success")
     
-    return html.Div([summary_cards, download_section, conflict_details])
+    components = [summary_cards, download_section]
+    if failed_details:
+        components.append(failed_details)
+    components.append(conflict_details)
+    
+    return html.Div(components)
 
 
 # ============================================================================

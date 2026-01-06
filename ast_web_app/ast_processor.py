@@ -189,9 +189,11 @@ class ASTProcessor:
     
     def _load_dataset_config(self) -> pd.DataFrame:
         """Load dataset configuration spreadsheets."""
-        # Get path to spreadsheets
-        # In production, these would be stored in a known location
-        workspace_xls = Path(self.config.get('workspace_xls', 'input_spreadsheets'))
+        # Default to the known path
+        workspace_xls = self.config.get(
+            'workspace_xls',
+            r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets'
+        )
         
         return DatasetConfig.read_spreadsheets(
             str(workspace_xls),
@@ -287,6 +289,7 @@ class ASTProcessor:
             'conflict_counts': conflict_counts,
             'conflicts_by_category': conflicts_by_category,
             'failed_datasets': len(self.failed_datasets),
+            'failed_details': self.failed_datasets,  # Include full details
             'output_file': output_file
         }
     
