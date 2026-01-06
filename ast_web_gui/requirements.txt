@@ -1,0 +1,29 @@
+# Core Flask and Dash
+Flask==3.0.0
+dash==2.14.2
+dash-bootstrap-components==1.5.0
+
+# Database drivers
+oracledb==2.0.0
+psycopg2-binary==2.9.9
+
+# Geospatial
+geopandas==0.14.1
+shapely==2.0.2
+fiona==1.9.5
+folium==0.15.1
+
+# Data processing
+pandas==2.1.4
+openpyxl==3.1.2
+xlsxwriter==3.1.9
+
+# Plotting
+plotly==5.18.0
+
+# Web server (for production)
+gunicorn==21.2.0
+gevent==23.9.1
+
+# Environment
+python-dotenv==1.0.0
