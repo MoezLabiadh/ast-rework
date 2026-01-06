@@ -23,7 +23,6 @@ from flask import Flask, send_file, request
 import plotly.graph_objects as go
 
 # Import the AST processing functions
-# (You'll need to refactor the original script slightly - see below)
 from ast_processor import ASTProcessor
 
 # ============================================================================
