@@ -17,8 +17,7 @@ from pathlib import Path
 from typing import Dict, Callable, Optional
 import pandas as pd
 
-# Import all the classes from your original script
-# You'll need to save the original script content in a file called ast_core.py
+# Import all the classes from main script
 from ast_core import (
     OracleConnection,
     PostGISConnection,
@@ -36,7 +35,8 @@ class ASTProcessor:
     Provides progress tracking and result aggregation.
     """
     
-    def __init__(self, config: Dict, progress_callback: Optional[Callable] = None):
+    def __init__(self, config: Dict, progress_callback: Optional[Callable] = None, 
+                 cancellation_check: Optional[Callable] = None):
         """
         Initialize AST processor.
         
@@ -51,9 +51,11 @@ class ASTProcessor:
                 - aoi_file: AOI file path (if applicable)
             progress_callback: Function to call with progress updates
                                signature: callback(progress_percent, message)
+            cancellation_check: Function that returns True if analysis should be cancelled
         """
         self.config = config
         self.progress_callback = progress_callback
+        self.cancellation_check = cancellation_check
         self.oracle_conn = None
         self.postgis_conn = None
         self.results = {}
@@ -63,6 +65,12 @@ class ASTProcessor:
         """Update progress if callback is provided."""
         if self.progress_callback:
             self.progress_callback(progress, message)
+    
+    def _is_cancelled(self) -> bool:
+        """Check if analysis has been cancelled."""
+        if self.cancellation_check:
+            return self.cancellation_check()
+        return False
     
     def run(self) -> Dict:
         """
@@ -211,6 +219,11 @@ class ASTProcessor:
         item_count = df_stat.shape[0]
         
         for index in df_stat.index:
+            # Check for cancellation
+            if self._is_cancelled():
+                self._update_progress(0, "Analysis cancelled by user")
+                raise Exception("Analysis cancelled by user")
+            
             # Calculate progress (30% to 85% of total progress)
             progress = 30 + int((index / item_count) * 55)
             

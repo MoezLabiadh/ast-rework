@@ -23,7 +23,6 @@ from flask import Flask, send_file, request
 import plotly.graph_objects as go
 
 # Import the AST processing functions
-# (You'll need to refactor the original script slightly - see below)
 from ast_processor import ASTProcessor
 
 # ============================================================================
@@ -199,21 +198,23 @@ def create_input_card():
                 dcc.Upload(
                     id='upload-shapefile',
                     children=html.Div([
-                        html.I(className="fas fa-cloud-upload-alt fa-3x mb-3"),
+                        html.I(className="fas fa-cloud-upload-alt fa-2x mb-2"),
                         html.Br(),
-                        'Drag and Drop or ',
-                        html.A('Select Shapefile (.shp, .shx, .dbf, .prj)')
-                    ]),
+                        html.Span('Drag and Drop or ', style={'lineHeight': 'normal'}),
+                        html.A('Select Shapefile (.shp, .shx, .dbf, .prj)', style={'lineHeight': 'normal'})
+                    ], style={'lineHeight': 'normal', 'padding': '20px'}),
                     style={
                         'width': '100%',
-                        'height': '150px',
-                        'lineHeight': '150px',
+                        'height': '120px',
                         'borderWidth': '2px',
                         'borderStyle': 'dashed',
                         'borderRadius': '10px',
                         'textAlign': 'center',
                         'backgroundColor': '#f8f9fa',
-                        'marginBottom': '15px'
+                        'marginBottom': '15px',
+                        'display': 'flex',
+                        'alignItems': 'center',
+                        'justifyContent': 'center'
                     },
                     multiple=True
                 ),
@@ -356,6 +357,26 @@ app.layout = html.Div([
 # ============================================================================
 # CALLBACKS
 # ============================================================================
+
+@app.callback(
+    [Output("job-id", "data", allow_duplicate=True),
+     Output("progress-text", "children", allow_duplicate=True)],
+    Input("cancel-button", "n_clicks"),
+    State("job-id", "data"),
+    prevent_initial_call=True
+)
+def cancel_analysis(n_clicks, job_id):
+    """Cancel the running analysis."""
+    if not n_clicks or not job_id:
+        return job_id, ""
+    
+    if job_id in job_store:
+        job_store[job_id]['status'] = 'cancelled'
+        job_store[job_id]['message'] = 'Cancelling analysis...'
+        return job_id, "Cancelling analysis..."
+    
+    return job_id, ""
+
 
 @app.callback(
     [Output("tantalis-inputs", "style"),
@@ -546,7 +567,10 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
     [Output("progress-bar", "value"),
      Output("progress-text", "children"),
      Output("dataset-status", "children"),
-     Output("results-container", "children")],
+     Output("results-container", "children"),
+     Output("run-button", "disabled", allow_duplicate=True),
+     Output("cancel-button", "disabled", allow_duplicate=True),
+     Output("progress-interval", "disabled", allow_duplicate=True)],
     Input("progress-interval", "n_intervals"),
     State("job-id", "data"),
     prevent_initial_call=True
@@ -554,35 +578,38 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
 def update_progress(n_intervals, job_id):
     """Update progress display."""
     if not job_id or job_id not in job_store:
-        return 0, "No active job", "", ""
+        return 0, "No active job", "", "", False, True, True
     
     job = job_store[job_id]
     
     progress_val = job['progress']
     progress_text = job['message']
     
-    # Dataset status
-    if job['total_datasets'] > 0:
-        dataset_info = html.Div([
-            html.P(f"Processing: {job['current_dataset']}", className="mb-1"),
-            html.Small(f"Completed {job['completed_datasets']} of {job['total_datasets']} datasets",
-                      className="text-muted")
-        ])
-    else:
-        dataset_info = ""
+    # Check if job was cancelled
+    if job['status'] == 'cancelled':
+        results = dbc.Alert([
+            html.H5("Analysis Cancelled", className="alert-heading"),
+            html.P("The analysis was stopped by user request.")
+        ], color="warning")
+        return progress_val, "⊗ Cancelled", "", results, False, True, True
     
     # Results
     if job['status'] == 'completed':
         results = create_results_display(job['results'], job_id)
-        return 100, "✓ Analysis Complete", "", results
+        # Re-enable the Run button, disable Cancel, stop progress updates
+        return 100, "✓ Analysis Complete", "", results, False, True, True
     elif job['status'] == 'error':
         results = dbc.Alert([
             html.H5("Error", className="alert-heading"),
-            html.P(str(job['error']))
+            html.P(str(job['error'])),
+            html.Hr(),
+            html.P("Please check your inputs and try again.", className="mb-0")
         ], color="danger")
-        return progress_val, "✗ Error", "", results
+        # Re-enable the Run button, disable Cancel, stop progress updates
+        return progress_val, "✗ Error", "", results, False, True, True
     else:
-        return progress_val, progress_text, dataset_info, ""
+        # Still running - keep buttons in running state, no extra dataset status
+        return progress_val, progress_text, "", "", True, False, False
 
 
 def create_results_display(results, job_id):
@@ -693,14 +720,20 @@ def run_ast_process(job_id, config):
         job_store[job_id]['status'] = 'running'
         job_store[job_id]['message'] = 'Connecting to databases...'
         
-        # Initialize processor
+        # Initialize processor with cancellation check
         processor = ASTProcessor(
             config,
-            progress_callback=lambda p, m: update_job_progress(job_id, p, m)
+            progress_callback=lambda p, m: update_job_progress(job_id, p, m),
+            cancellation_check=lambda: job_store.get(job_id, {}).get('status') == 'cancelled'
         )
         
         # Run analysis
         results = processor.run()
+        
+        # Check if cancelled during processing
+        if job_store[job_id]['status'] == 'cancelled':
+            job_store[job_id]['message'] = 'Analysis cancelled by user'
+            return
         
         # Store results
         job_store[job_id]['status'] = 'completed'
@@ -709,9 +742,13 @@ def run_ast_process(job_id, config):
         job_store[job_id]['results'] = results
         
     except Exception as e:
-        job_store[job_id]['status'] = 'error'
-        job_store[job_id]['error'] = str(e)
-        print(f"Error in job {job_id}: {e}")
+        # Check if error is due to cancellation
+        if job_store.get(job_id, {}).get('status') == 'cancelled':
+            job_store[job_id]['message'] = 'Analysis cancelled by user'
+        else:
+            job_store[job_id]['status'] = 'error'
+            job_store[job_id]['error'] = str(e)
+            print(f"Error in job {job_id}: {e}")
 
 
 def update_job_progress(job_id, progress, message):
