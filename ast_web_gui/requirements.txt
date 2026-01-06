@@ -12,6 +12,8 @@ geopandas==0.14.1
 shapely==2.0.2
 fiona==1.9.5
 folium==0.15.1
+matplotlib>=3.7
+mapclassify>=2.6
 
 # Data processing
 pandas==2.1.4
