@@ -228,7 +228,7 @@ def create_input_card():
                     dbc.Input(
                         id="workspace",
                         placeholder="Path to workspace directory",
-                        value=str(Path.cwd() / "outputs"),
+                        value="W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\outputs\APP",
                         type="text"
                     )
                 ], md=6),
