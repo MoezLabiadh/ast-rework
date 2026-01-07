@@ -1,3 +1,13 @@
+"""
+AST LITE - Web GUI Application
+
+A Flask/Dash web interface for running the Automatic Status Tool.
+
+Author: Moez Labiadh
+
+Created: 2026-01-06
+"""
+
 import os
 import json
 import shutil
@@ -13,6 +23,7 @@ from flask import Flask, send_file, request
 import plotly.graph_objects as go
 
 # Import the AST processing functions
+# (You'll need to refactor the original script slightly - see below)
 from ast_processor import ASTProcessor
 
 # ============================================================================
@@ -146,6 +157,28 @@ def create_input_card():
             "Area of Interest (AOI) Configuration"
         ]),
         dbc.CardBody([
+            # Region at the top
+            dbc.Row([
+                dbc.Col([
+                    html.Label("Region", className="fw-bold"),
+                    dbc.Select(
+                        id="region",
+                        options=[
+                            {"label": "Cariboo", "value": "cariboo"},
+                            {"label": "Kootenay", "value": "kootenay"},
+                            {"label": "Northeast", "value": "northeast"},
+                            {"label": "Omineca", "value": "omineca"},
+                            {"label": "Skeena", "value": "skeena"},
+                            {"label": "South Coast", "value": "south_coast"},
+                            {"label": "Thompson Okanagan", "value": "thompson_okanagan"},
+                            {"label": "West Coast", "value": "west_coast"},
+                        ],
+                        value="west_coast"
+                    )
+                ], md=12),
+            ], className="mb-4"),
+            
+            # Input Source selection
             dbc.Row([
                 dbc.Col([
                     html.Label("Input Source", className="fw-bold"),
@@ -212,35 +245,33 @@ def create_input_card():
                     type="default",
                     children=html.Div(id='upload-status', className="mt-2")
                 )
-            ], style={'display': 'none'}),
-            
+            ], style={'display': 'none'})
+        ])
+    ], className="mb-4")
+
+
+def create_workspace_card():
+    """Create workspace/output directory configuration card."""
+    return dbc.Card([
+        dbc.CardHeader([
+            html.I(className="fas fa-folder-open me-2"),
+            "Output Configuration"
+        ]),
+        dbc.CardBody([
             dbc.Row([
                 dbc.Col([
-                    html.Label("Region", className="fw-bold mt-3"),
-                    dbc.Select(
-                        id="region",
-                        options=[
-                            {"label": "Cariboo", "value": "cariboo"},
-                            {"label": "Kootenay", "value": "kootenay"},
-                            {"label": "Northeast", "value": "northeast"},
-                            {"label": "Omineca", "value": "omineca"},
-                            {"label": "Skeena", "value": "skeena"},
-                            {"label": "South Coast", "value": "south_coast"},
-                            {"label": "Thompson Okanagan", "value": "thompson_okanagan"},
-                            {"label": "West Coast", "value": "west_coast"},
-                        ],
-                        value="west_coast"
-                    )
-                ], md=6),
-                dbc.Col([
-                    html.Label("Workspace/Output Directory", className="fw-bold mt-3"),
+                    html.Label("Workspace/Output Directory", className="fw-bold"),
                     dbc.Input(
                         id="workspace",
                         placeholder="Path to workspace directory",
                         value=r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\outputs\APP",
                         type="text"
+                    ),
+                    html.Small(
+                        "All outputs (Excel report, maps, uploads) will be saved to this directory",
+                        className="text-muted mt-2"
                     )
-                ], md=6),
+                ])
             ])
         ])
     ], className="mb-4")
@@ -327,6 +358,7 @@ app.layout = html.Div([
             dbc.Col([
                 create_connection_card(),
                 create_input_card(),
+                create_workspace_card(),
                 create_control_card(),
             ], md=12, lg=6),
             dbc.Col([
