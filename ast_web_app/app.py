@@ -1,13 +1,3 @@
-"""
-AST LITE - Web GUI Application
-
-A Flask/Dash web interface for running the Automatic Status Tool.
-
-Author:  Moez Labiadh - GeoBC
-
-Created: 2026-01-06
-"""
-
 import os
 import json
 import shutil
@@ -23,7 +13,6 @@ from flask import Flask, send_file, request
 import plotly.graph_objects as go
 
 # Import the AST processing functions
-# (You'll need to refactor the original script slightly - see below)
 from ast_processor import ASTProcessor
 
 # ============================================================================
@@ -218,7 +207,11 @@ def create_input_card():
                     },
                     multiple=False  # Only accept single zip file
                 ),
-                html.Div(id='upload-status', className="mt-2")
+                dcc.Loading(
+                    id="loading-upload",
+                    type="default",
+                    children=html.Div(id='upload-status', className="mt-2")
+                )
             ], style={'display': 'none'}),
             
             dbc.Row([
@@ -236,7 +229,7 @@ def create_input_card():
                             {"label": "Thompson Okanagan", "value": "thompson_okanagan"},
                             {"label": "West Coast", "value": "west_coast"},
                         ],
-                        value="cariboo"
+                        value="west_coast"
                     )
                 ], md=6),
                 dbc.Col([

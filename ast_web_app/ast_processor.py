@@ -17,8 +17,7 @@ from pathlib import Path
 from typing import Dict, Callable, Optional
 import pandas as pd
 
-# Import all the classes from your original script
-# You'll need to save the original script content in a file called ast_core.py
+# Import all the classes from the core processing script
 from ast_core import (
     OracleConnection,
     PostGISConnection,
