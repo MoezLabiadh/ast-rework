@@ -23,6 +23,7 @@ from flask import Flask, send_file, request
 import plotly.graph_objects as go
 
 # Import the AST processing functions
+# (You'll need to refactor the original script slightly - see below)
 from ast_processor import ASTProcessor
 
 # ============================================================================
@@ -31,13 +32,9 @@ from ast_processor import ASTProcessor
 
 server = Flask(__name__)
 server.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-server.config['UPLOAD_FOLDER'] = 'uploads'
-server.config['OUTPUT_FOLDER'] = 'outputs'
 server.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
 
-# Create necessary directories
-os.makedirs(server.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(server.config['OUTPUT_FOLDER'], exist_ok=True)
+# Note: Upload and output folders will be created dynamically as needed
 
 # ============================================================================
 # DASH APP SETUP
@@ -167,7 +164,7 @@ def create_input_card():
                         id="input-source",
                         options=[
                             {"label": "TANTALIS", "value": "TANTALIS"},
-                            {"label": "Upload Shapefile", "value": "AOI"}
+                            {"label": "Upload File (Shapefile or GDB)", "value": "UPLOAD"}
                         ],
                         value="TANTALIS",
                         inline=True
@@ -193,19 +190,22 @@ def create_input_card():
                 ])
             ]),
             
-            # AOI file upload (hidden by default)
-            html.Div(id="aoi-upload", children=[
+            # File upload (hidden by default) - handles shapefile and GDB (zipped)
+            html.Div(id="file-upload", children=[
                 dcc.Upload(
-                    id='upload-shapefile',
+                    id='upload-file',
                     children=html.Div([
                         html.I(className="fas fa-cloud-upload-alt fa-2x mb-2"),
                         html.Br(),
                         html.Span('Drag and Drop or ', style={'lineHeight': 'normal'}),
-                        html.A('Select Shapefile (.shp, .shx, .dbf, .prj)', style={'lineHeight': 'normal'})
+                        html.A('Select File', style={'lineHeight': 'normal'}),
+                        html.Br(),
+                        html.Small('(Zipped Shapefile or Zipped Geodatabase)', 
+                                 style={'lineHeight': 'normal', 'color': '#6c757d'})
                     ], style={'lineHeight': 'normal', 'padding': '20px'}),
                     style={
                         'width': '100%',
-                        'height': '120px',
+                        'height': '140px',
                         'borderWidth': '2px',
                         'borderStyle': 'dashed',
                         'borderRadius': '10px',
@@ -216,7 +216,7 @@ def create_input_card():
                         'alignItems': 'center',
                         'justifyContent': 'center'
                     },
-                    multiple=True
+                    multiple=False  # Only accept single zip file
                 ),
                 html.Div(id='upload-status', className="mt-2")
             ], style={'display': 'none'}),
@@ -380,56 +380,170 @@ def cancel_analysis(n_clicks, job_id):
 
 @app.callback(
     [Output("tantalis-inputs", "style"),
-     Output("aoi-upload", "style")],
+     Output("file-upload", "style")],
     Input("input-source", "value")
 )
 def toggle_input_source(input_source):
-    """Toggle between TANTALIS and AOI upload inputs."""
+    """Toggle between TANTALIS and file upload inputs."""
     if input_source == "TANTALIS":
         return {"display": "block"}, {"display": "none"}
-    else:
+    else:  # UPLOAD
         return {"display": "none"}, {"display": "block"}
 
 
 @app.callback(
     [Output("upload-status", "children"),
      Output("uploaded-files", "data")],
-    Input("upload-shapefile", "contents"),
-    State("upload-shapefile", "filename")
+    Input("upload-file", "contents"),
+    State("upload-file", "filename"),
+    State("workspace", "value")
 )
-def handle_file_upload(contents, filenames):
-    """Handle shapefile upload."""
+def handle_file_upload(contents, filename, workspace):
+    """Handle zipped shapefile or geodatabase upload."""
     if not contents:
         return "", None
     
-    upload_id = str(uuid.uuid4())
-    upload_dir = Path(server.config['UPLOAD_FOLDER']) / upload_id
-    upload_dir.mkdir(exist_ok=True)
+    import zipfile
+    import io
+    import base64
+    import fiona
     
-    uploaded = []
-    for content, filename in zip(contents, filenames):
-        # Decode and save file
-        content_type, content_string = content.split(',')
-        import base64
+    # Create uploads folder inside the workspace directory
+    upload_id = str(uuid.uuid4())
+    workspace_path = Path(workspace) if workspace else Path.cwd()
+    upload_dir = workspace_path / 'uploads' / upload_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # Decode the uploaded file
+        content_type, content_string = contents.split(',')
         decoded = base64.b64decode(content_string)
         
-        file_path = upload_dir / filename
-        with open(file_path, 'wb') as f:
-            f.write(decoded)
-        uploaded.append(filename)
-    
-    # Find the .shp file
-    shp_file = next((f for f in uploaded if f.endswith('.shp')), None)
-    
-    if not shp_file:
-        return dbc.Alert("Please upload a .shp file", color="danger"), None
-    
-    status = dbc.Alert([
-        html.I(className="fas fa-check-circle me-2"),
-        f"Uploaded: {', '.join(uploaded)}"
-    ], color="success")
-    
-    return status, {"upload_id": upload_id, "shp_file": shp_file}
+        # Check if it's a zip file
+        if not filename.lower().endswith('.zip'):
+            return dbc.Alert("Please upload a ZIP file containing either a shapefile or geodatabase", color="danger"), None
+        
+        # Extract the zip file
+        with zipfile.ZipFile(io.BytesIO(decoded)) as zip_ref:
+            zip_ref.extractall(upload_dir)
+        
+        # Check what was extracted
+        extracted_files = list(upload_dir.rglob('*'))
+        
+        # Look for shapefile (.shp)
+        shp_files = [f for f in extracted_files if f.suffix.lower() == '.shp']
+        
+        # Look for geodatabase (.gdb folder)
+        gdb_dirs = [f for f in extracted_files if f.is_dir() and f.suffix.lower() == '.gdb']
+        
+        if shp_files:
+            # Shapefile found
+            if len(shp_files) > 1:
+                return dbc.Alert([
+                    html.H5("Multiple Shapefiles Found", className="alert-heading"),
+                    html.P(f"Found {len(shp_files)} shapefiles. Please upload a ZIP with only one shapefile."),
+                    html.Ul([html.Li(f.name) for f in shp_files])
+                ], color="warning"), None
+            
+            shp_path = shp_files[0]
+            
+            # Verify required files exist
+            required_extensions = ['.shx', '.dbf']
+            missing = []
+            for ext in required_extensions:
+                if not (shp_path.parent / (shp_path.stem + ext)).exists():
+                    missing.append(ext)
+            
+            if missing:
+                return dbc.Alert([
+                    html.H5("Incomplete Shapefile", className="alert-heading"),
+                    html.P(f"Missing required files: {', '.join(missing)}")
+                ], color="danger"), None
+            
+            status = dbc.Alert([
+                html.I(className="fas fa-check-circle me-2"),
+                f"Shapefile uploaded successfully!",
+                html.Br(),
+                html.Small(f"File: {shp_path.name}", className="text-muted")
+            ], color="success")
+            
+            return status, {
+                "workspace": workspace,
+                "upload_id": upload_id,
+                "file_type": "shapefile",
+                "file_path": str(shp_path)
+            }
+        
+        elif gdb_dirs:
+            # Geodatabase found
+            if len(gdb_dirs) > 1:
+                return dbc.Alert([
+                    html.H5("Multiple Geodatabases Found", className="alert-heading"),
+                    html.P(f"Found {len(gdb_dirs)} geodatabases. Please upload a ZIP with only one .gdb folder."),
+                    html.Ul([html.Li(f.name) for f in gdb_dirs])
+                ], color="warning"), None
+            
+            gdb_path = gdb_dirs[0]
+            
+            # List feature classes in the GDB
+            try:
+                layers = fiona.listlayers(str(gdb_path))
+            except Exception as e:
+                return dbc.Alert([
+                    html.H5("Error Reading Geodatabase", className="alert-heading"),
+                    html.P(str(e))
+                ], color="danger"), None
+            
+            if len(layers) == 0:
+                return dbc.Alert("No feature classes found in geodatabase", color="danger"), None
+            
+            if len(layers) > 1:
+                layer_list = html.Ul([html.Li(layer) for layer in layers])
+                return dbc.Alert([
+                    html.H5("Multiple Feature Classes Found", className="alert-heading"),
+                    html.P("The geodatabase contains multiple feature classes. Please upload a GDB with only one feature class."),
+                    html.P("Found feature classes:", className="mb-1"),
+                    layer_list
+                ], color="warning"), None
+            
+            # Exactly one feature class - perfect!
+            fc_name = layers[0]
+            fc_path = str(gdb_path / fc_name)
+            
+            status = dbc.Alert([
+                html.I(className="fas fa-check-circle me-2"),
+                f"Geodatabase uploaded successfully!",
+                html.Br(),
+                html.Small(f"Feature class: {fc_name}", className="text-muted")
+            ], color="success")
+            
+            return status, {
+                "workspace": workspace,
+                "upload_id": upload_id,
+                "file_type": "gdb",
+                "file_path": fc_path,
+                "gdb_path": str(gdb_path),
+                "fc_name": fc_name
+            }
+        
+        else:
+            return dbc.Alert([
+                html.H5("Invalid ZIP Content", className="alert-heading"),
+                html.P("Could not find a shapefile (.shp) or geodatabase (.gdb) in the ZIP file."),
+                html.P("Please ensure your ZIP contains either:"),
+                html.Ul([
+                    html.Li("A shapefile with .shp, .shx, .dbf (and optionally .prj) files"),
+                    html.Li("A .gdb folder with geodatabase files")
+                ])
+            ], color="danger"), None
+            
+    except zipfile.BadZipFile:
+        return dbc.Alert("Invalid ZIP file. Please upload a valid ZIP archive.", color="danger"), None
+    except Exception as e:
+        return dbc.Alert([
+            html.H5("Error Processing Upload", className="alert-heading"),
+            html.P(str(e))
+        ], color="danger"), None
 
 
 @app.callback(
@@ -485,9 +599,9 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
             validation_errors.append("Disposition ID is required")
         if not parcel_id:
             validation_errors.append("Parcel ID is required")
-    else:
+    elif input_source == "UPLOAD":
         if not uploaded_files:
-            validation_errors.append("Please upload a shapefile")
+            validation_errors.append("Please upload a zipped shapefile or geodatabase")
     
     # Show validation errors
     if validation_errors:
@@ -542,9 +656,8 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
             'disposition_id': int(disp_id),
             'parcel_id': int(parcel_id)
         }
-    else:
-        upload_dir = Path(server.config['UPLOAD_FOLDER']) / uploaded_files['upload_id']
-        config['aoi_file'] = str(upload_dir / uploaded_files['shp_file'])
+    else:  # UPLOAD
+        config['aoi_file'] = uploaded_files['file_path']
     
     # Start processing in background thread
     thread = threading.Thread(

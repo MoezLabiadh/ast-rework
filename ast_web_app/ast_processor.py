@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Dict, Callable, Optional
 import pandas as pd
 
-# Import all the classes from main script
+# Import all the classes from your original script
+# You'll need to save the original script content in a file called ast_core.py
 from ast_core import (
     OracleConnection,
     PostGISConnection,
@@ -88,7 +89,11 @@ class ASTProcessor:
         try:
             # Setup workspace
             workspace = Path(self.config['workspace'])
-            workspace.mkdir(exist_ok=True)
+            workspace.mkdir(parents=True, exist_ok=True)
+            
+            # Create maps subdirectory
+            maps_dir = workspace / 'maps'
+            maps_dir.mkdir(exist_ok=True)
             
             # Connect to databases
             self._update_progress(5, "Connecting to Oracle/BCGW...")
@@ -152,8 +157,8 @@ class ASTProcessor:
     
     def _load_aoi(self):
         """Load and process AOI geometry."""
-        if self.config['input_source'] == 'AOI':
-            # Load from file
+        if self.config['input_source'] in ['UPLOAD', 'AOI', 'SHAPEFILE']:
+            # Load from file (shapefile or feature class)
             aoi_path = self.config['aoi_file']
             gdf_aoi = GeometryProcessor.esri_to_gdf(aoi_path)
         else:
