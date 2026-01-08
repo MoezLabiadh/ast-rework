@@ -5,7 +5,7 @@ Purpose:     This script checks for overlaps between an AOI and datasets
              specified in the AST datasets spreadsheets (common and region specific). 
              
 Notes        The script supports AOIs in TANTALIS Crown Tenure spatial view 
-             and User defined AOIs (shp, featureclass).
+             and User defined AOIs (shp, featureclass, kml/kmz).
                
              The script generates a spreadhseet of conflicts (TAB3) of the 
              standard AST reportand Interactive HTML maps showing the AOI and ovelappng features
@@ -16,7 +16,7 @@ Arguments:   - Output location (workspace)
              - DB credentials for Oracle/BCGW and PostGIS
              - Input source: TANTALIS OR AOI
              - Region (west coast, skeena...)
-             - AOI: - ESRI shp or featureclass (AOI) OR
+             - AOI: - ESRI shp or featureclass or kml/kmz (AOI) OR
                     - TANTALIS File number
                     - TANTALIS Disposition ID
                     - TANTALIS Parcel ID
@@ -24,7 +24,7 @@ Arguments:   - Output location (workspace)
 Author: Moez Labiadh - GeoBC
 
 Created: 2025-12-23
-Updated: 2025-01-05
+Updated: 2025-01-08
 """
 
 import warnings
@@ -218,25 +218,93 @@ class GeometryProcessor:
     """Handles geometry operations and conversions."""
     
     @staticmethod
-    def esri_to_gdf(aoi_path: str) -> gpd.GeoDataFrame:
+    def read_spatial_file(aoi_path: str) -> gpd.GeoDataFrame:
         """
-        Convert ESRI format vector to GeoDataFrame.
-        
-        Args:
-            aoi_path: Path to shapefile or feature class
-        
-        Returns:
-            GeoDataFrame
+        Convert ESRI format vector or KML/KMZ to GeoDataFrame.
         """
-        if '.shp' in aoi_path:
-            return gpd.read_file(aoi_path)
-        elif '.gdb' in aoi_path:
+        import fiona
+        import zipfile
+        import tempfile
+        import shutil
+        
+        fiona.drvsupport.supported_drivers['KML'] = 'rw'
+        
+        # Convert to Path object for easier handling
+        path = Path(aoi_path)
+        aoi_path_lower = str(aoi_path).lower()
+        
+        # Handle Shapefile
+        if '.shp' in aoi_path_lower:
+            gdf = gpd.read_file(aoi_path)
+        
+        # Handle Feature Class (GDB)
+        elif '.gdb' in aoi_path_lower:
             parts = aoi_path.split('.gdb')
             gdb = parts[0] + '.gdb'
             fc = os.path.basename(aoi_path)
-            return gpd.read_file(filename=gdb, layer=fc)
+            gdf = gpd.read_file(filename=gdb, layer=fc)
+        
+        # Handle KML
+        elif aoi_path_lower.endswith('.kml'):
+            try:
+                layers = fiona.listlayers(aoi_path)
+                if not layers:
+                    raise ValueError(f'No layers found in KML file: {aoi_path}')
+                
+                layer_name = layers[0]
+                print(f'....Reading KML layer: {layer_name}')
+                gdf = gpd.read_file(aoi_path, driver='KML', layer=layer_name)
+                
+                if gdf.crs and gdf.crs.to_epsg() != 3005:
+                    print(f'....Reprojecting from {gdf.crs.to_string()} to EPSG:3005')
+                    gdf = gdf.to_crs(epsg=3005)
+            except Exception as e:
+                raise ValueError(f'Error reading KML file: {e}')
+        
+        # Handle KMZ (Robust method: Extract to temp then read)
+        elif aoi_path_lower.endswith('.kmz'):
+            tmp_dir = tempfile.mkdtemp()
+            try:
+                with zipfile.ZipFile(aoi_path, 'r') as zip_ref:
+                    # Find the first .kml file inside the KMZ
+                    kml_files = [f for f in zip_ref.namelist() if f.lower().endswith('.kml')]
+                    if not kml_files:
+                        raise ValueError(f"No KML file found inside KMZ: {aoi_path}")
+                    
+                    # Extract the KML to the temp directory
+                    extracted_kml_path = zip_ref.extract(kml_files[0], tmp_dir)
+                
+                # Use the same logic as the KML block
+                layers = fiona.listlayers(extracted_kml_path)
+                layer_name = layers[0]
+                print(f'....Reading KMZ (extracted) layer: {layer_name}')
+                
+                gdf = gpd.read_file(extracted_kml_path, driver='KML', layer=layer_name)
+                
+                if gdf.crs and gdf.crs.to_epsg() != 3005:
+                    print(f'....Reprojecting from {gdf.crs.to_string()} to EPSG:3005')
+                    gdf = gdf.to_crs(epsg=3005)
+                
+            except Exception as e:
+                raise ValueError(f'Error reading KMZ file: {e}')
+            finally:
+                # Always clean up the temporary directory
+                shutil.rmtree(tmp_dir)
+        
         else:
-            raise ValueError('Format not recognized. Please provide a shp or featureclass (gdb)!')
+            raise ValueError(
+                'Format not recognized. Please provide a shapefile (.shp), '
+                'feature class (.gdb), KML (.kml), or KMZ (.kmz) file!'
+            )
+        
+        # Validate that we have geometries
+        if gdf.empty:
+            raise ValueError(f'No features found in file: {aoi_path}')
+        
+        if 'geometry' not in gdf.columns and gdf.geometry is None:
+            raise ValueError(f'No geometry column found in file: {aoi_path}')
+        
+        return gdf
     
     @staticmethod
     def df_to_gdf(df: pd.DataFrame, crs: int) -> gpd.GeoDataFrame:
@@ -1260,12 +1328,12 @@ def main():
     # Configuration
     workspace = r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework"
     wksp_xls = os.path.join(workspace, 'input_spreadsheets')
-    aoi = os.path.join(workspace, 'test_data', 'aoi_test_2.shp')
+    aoi = os.path.join(workspace, 'test_data', 'aoi_test_3.kmz')
     out_wksp = os.path.join(workspace, 'outputs')
     
     # User inputs
-    input_src = 'TANTALIS'  # Options: 'TANTALIS' or 'AOI'
-    region = 'cariboo'
+    input_src = 'AOI'  # Options: 'TANTALIS' or 'AOI'
+    region = 'west_coast'
     
     # TANTALIS parameters (if input_src == 'TANTALIS')
     file_nbr = '5408057'
@@ -1298,7 +1366,7 @@ def main():
         print('\nReading User inputs: AOI.')
         if input_src == 'AOI':
             print('....Reading the AOI file')
-            gdf_aoi = GeometryProcessor.esri_to_gdf(aoi)
+            gdf_aoi = GeometryProcessor.read_spatial_file(aoi)
         elif input_src == 'TANTALIS':
             print(f'....input File Number: {file_nbr}')
             print(f'....input Disposition ID: {disp_id}')
