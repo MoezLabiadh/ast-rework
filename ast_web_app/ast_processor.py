@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Dict, Callable, Optional
 import pandas as pd
 
-# Import all the classes from the core processing script
+# Import all the classes from your original script
+# You'll need to save the original script content in a file called ast_core.py
 from ast_core import (
     OracleConnection,
     PostGISConnection,
@@ -280,21 +281,30 @@ class ASTProcessor:
                 conflict_counts[item_name] = count
                 conflicts_found += 1
         
-        # Group by category
+        # Group by category - matching Excel logic
         df_res = df_stat[['Category', 'Featureclass_Name(valid characters only)']].copy()
         df_res.rename(
             columns={'Featureclass_Name(valid characters only)': 'item'},
             inplace=True
         )
         
+        # Forward-fill missing Category values (same as Excel)
+        df_res['Category'] = df_res['Category'].replace('', pd.NA)
+        df_res['Category'] = df_res['Category'].ffill()
+        
+        # Count conflicts by category
         category_conflicts = {}
         for _, row in df_res.iterrows():
             category = row['Category']
             item = row['item']
             
             if item in conflict_counts:
-                category_conflicts[category] = category_conflicts.get(category, 0) + conflict_counts[item]
+                # Add to category count
+                if category not in category_conflicts:
+                    category_conflicts[category] = 0
+                category_conflicts[category] += conflict_counts[item]
         
+        # Convert to list of dicts for display
         conflicts_by_category = [
             {'category': cat, 'count': count}
             for cat, count in category_conflicts.items()
