@@ -5,7 +5,7 @@ A Flask/Dash web interface for running the Automatic Status Tool.
 
 Author: Moez Labiadh
 
-Created: 2026-01-06
+Created: 2026-01-08
 """
 
 import os
@@ -23,7 +23,6 @@ from flask import Flask, send_file, request
 import plotly.graph_objects as go
 
 # Import the AST processing functions
-# (You'll need to refactor the original script slightly - see below)
 from ast_processor import ASTProcessor
 
 # ============================================================================
@@ -186,7 +185,7 @@ def create_input_card():
                         id="input-source",
                         options=[
                             {"label": "TANTALIS", "value": "TANTALIS"},
-                            {"label": "Upload File (Shapefile or GDB)", "value": "UPLOAD"}
+                            {"label": "Upload File", "value": "UPLOAD"}
                         ],
                         value="TANTALIS",
                         inline=True
@@ -212,7 +211,7 @@ def create_input_card():
                 ])
             ]),
             
-            # File upload (hidden by default) - handles shapefile and GDB (zipped)
+            # File upload (hidden by default)
             html.Div(id="file-upload", children=[
                 dcc.Upload(
                     id='upload-file',
@@ -222,7 +221,7 @@ def create_input_card():
                         html.Span('Drag and Drop or ', style={'lineHeight': 'normal'}),
                         html.A('Select File', style={'lineHeight': 'normal'}),
                         html.Br(),
-                        html.Small('(Zipped Shapefile or Zipped Geodatabase)', 
+                        html.Small('(Supported files: Shapefile or Geodatabase (zipped *.zip), KML/KMZ)', 
                                  style={'lineHeight': 'normal', 'color': '#6c757d'})
                     ], style={'lineHeight': 'normal', 'padding': '20px'}),
                     style={
@@ -424,7 +423,7 @@ def toggle_input_source(input_source):
     State("workspace", "value")
 )
 def handle_file_upload(contents, filename, workspace):
-    """Handle zipped shapefile or geodatabase upload."""
+    """Handle zipped shapefile, geodatabase, KML, or KMZ upload."""
     if not contents:
         return "", None
     
@@ -444,121 +443,217 @@ def handle_file_upload(contents, filename, workspace):
         content_type, content_string = contents.split(',')
         decoded = base64.b64decode(content_string)
         
-        # Check if it's a zip file
-        if not filename.lower().endswith('.zip'):
-            return dbc.Alert("Please upload a ZIP file containing either a shapefile or geodatabase", color="danger"), None
+        file_ext = filename.lower()
         
-        # Extract the zip file
-        with zipfile.ZipFile(io.BytesIO(decoded)) as zip_ref:
-            zip_ref.extractall(upload_dir)
-        
-        # Check what was extracted
-        extracted_files = list(upload_dir.rglob('*'))
-        
-        # Look for shapefile (.shp)
-        shp_files = [f for f in extracted_files if f.suffix.lower() == '.shp']
-        
-        # Look for geodatabase (.gdb folder)
-        gdb_dirs = [f for f in extracted_files if f.is_dir() and f.suffix.lower() == '.gdb']
-        
-        if shp_files:
-            # Shapefile found
-            if len(shp_files) > 1:
-                return dbc.Alert([
-                    html.H5("Multiple Shapefiles Found", className="alert-heading"),
-                    html.P(f"Found {len(shp_files)} shapefiles. Please upload a ZIP with only one shapefile."),
-                    html.Ul([html.Li(f.name) for f in shp_files])
-                ], color="warning"), None
+        # Handle KML files directly (no extraction needed)
+        if file_ext.endswith('.kml'):
+            kml_path = upload_dir / filename
+            with open(kml_path, 'wb') as f:
+                f.write(decoded)
             
-            shp_path = shp_files[0]
-            
-            # Verify required files exist
-            required_extensions = ['.shx', '.dbf']
-            missing = []
-            for ext in required_extensions:
-                if not (shp_path.parent / (shp_path.stem + ext)).exists():
-                    missing.append(ext)
-            
-            if missing:
-                return dbc.Alert([
-                    html.H5("Incomplete Shapefile", className="alert-heading"),
-                    html.P(f"Missing required files: {', '.join(missing)}")
-                ], color="danger"), None
-            
-            status = dbc.Alert([
-                html.I(className="fas fa-check-circle me-2"),
-                f"Shapefile uploaded successfully!",
-                html.Br(),
-                html.Small(f"File: {shp_path.name}", className="text-muted")
-            ], color="success")
-            
-            return status, {
-                "workspace": workspace,
-                "upload_id": upload_id,
-                "file_type": "shapefile",
-                "file_path": str(shp_path)
-            }
-        
-        elif gdb_dirs:
-            # Geodatabase found
-            if len(gdb_dirs) > 1:
-                return dbc.Alert([
-                    html.H5("Multiple Geodatabases Found", className="alert-heading"),
-                    html.P(f"Found {len(gdb_dirs)} geodatabases. Please upload a ZIP with only one .gdb folder."),
-                    html.Ul([html.Li(f.name) for f in gdb_dirs])
-                ], color="warning"), None
-            
-            gdb_path = gdb_dirs[0]
-            
-            # List feature classes in the GDB
+            # Validate KML has features
             try:
-                layers = fiona.listlayers(str(gdb_path))
+                layers = fiona.listlayers(str(kml_path))
+                if not layers:
+                    return dbc.Alert("No layers found in KML file", color="danger"), None
+                
+                # KML can have multiple layers, use the first one
+                layer_name = layers[0]
+                
+                status = dbc.Alert([
+                    html.I(className="fas fa-check-circle me-2"),
+                    f"KML file uploaded successfully!",
+                    html.Br(),
+                    html.Small(f"Layer: {layer_name}", className="text-muted")
+                ], color="success")
+                
+                return status, {
+                    "workspace": workspace,
+                    "upload_id": upload_id,
+                    "file_type": "kml",
+                    "file_path": str(kml_path),
+                    "layer_name": layer_name
+                }
             except Exception as e:
                 return dbc.Alert([
-                    html.H5("Error Reading Geodatabase", className="alert-heading"),
+                    html.H5("Error Reading KML", className="alert-heading"),
                     html.P(str(e))
                 ], color="danger"), None
-            
-            if len(layers) == 0:
-                return dbc.Alert("No feature classes found in geodatabase", color="danger"), None
-            
-            if len(layers) > 1:
-                layer_list = html.Ul([html.Li(layer) for layer in layers])
+        
+        # Handle KMZ files (zipped KML)
+        elif file_ext.endswith('.kmz'):
+            try:
+                with zipfile.ZipFile(io.BytesIO(decoded)) as zip_ref:
+                    zip_ref.extractall(upload_dir)
+                
+                # Find the KML file inside
+                kml_files = list(upload_dir.rglob('*.kml'))
+                if not kml_files:
+                    return dbc.Alert("No KML file found inside KMZ", color="danger"), None
+                
+                if len(kml_files) > 1:
+                    return dbc.Alert([
+                        html.H5("Multiple KML Files Found", className="alert-heading"),
+                        html.P(f"Found {len(kml_files)} KML files. Please use a KMZ with only one KML file."),
+                        html.Ul([html.Li(f.name) for f in kml_files])
+                    ], color="warning"), None
+                
+                kml_path = kml_files[0]
+                
+                # Validate KML
+                layers = fiona.listlayers(str(kml_path))
+                if not layers:
+                    return dbc.Alert("No layers found in KML file", color="danger"), None
+                
+                layer_name = layers[0]
+                
+                status = dbc.Alert([
+                    html.I(className="fas fa-check-circle me-2"),
+                    f"KMZ file uploaded successfully!",
+                    html.Br(),
+                    html.Small(f"Layer: {layer_name}", className="text-muted")
+                ], color="success")
+                
+                return status, {
+                    "workspace": workspace,
+                    "upload_id": upload_id,
+                    "file_type": "kmz",
+                    "file_path": str(kml_path),
+                    "layer_name": layer_name
+                }
+            except zipfile.BadZipFile:
+                return dbc.Alert("Invalid KMZ file. KMZ must be a valid ZIP archive.", color="danger"), None
+            except Exception as e:
                 return dbc.Alert([
-                    html.H5("Multiple Feature Classes Found", className="alert-heading"),
-                    html.P("The geodatabase contains multiple feature classes. Please upload a GDB with only one feature class."),
-                    html.P("Found feature classes:", className="mb-1"),
-                    layer_list
-                ], color="warning"), None
+                    html.H5("Error Processing KMZ", className="alert-heading"),
+                    html.P(str(e))
+                ], color="danger"), None
+        
+        # Handle ZIP files (shapefile or GDB)
+        elif file_ext.endswith('.zip'):
+            # Extract the zip file
+            with zipfile.ZipFile(io.BytesIO(decoded)) as zip_ref:
+                zip_ref.extractall(upload_dir)
             
-            # Exactly one feature class - perfect!
-            fc_name = layers[0]
-            fc_path = str(gdb_path / fc_name)
+            # Check what was extracted
+            extracted_files = list(upload_dir.rglob('*'))
             
-            status = dbc.Alert([
-                html.I(className="fas fa-check-circle me-2"),
-                f"Geodatabase uploaded successfully!",
-                html.Br(),
-                html.Small(f"Feature class: {fc_name}", className="text-muted")
-            ], color="success")
+            # Look for shapefile (.shp)
+            shp_files = [f for f in extracted_files if f.suffix.lower() == '.shp']
             
-            return status, {
-                "workspace": workspace,
-                "upload_id": upload_id,
-                "file_type": "gdb",
-                "file_path": fc_path,
-                "gdb_path": str(gdb_path),
-                "fc_name": fc_name
-            }
+            # Look for geodatabase (.gdb folder)
+            gdb_dirs = [f for f in extracted_files if f.is_dir() and f.suffix.lower() == '.gdb']
+            
+            if shp_files:
+                # Shapefile found
+                if len(shp_files) > 1:
+                    return dbc.Alert([
+                        html.H5("Multiple Shapefiles Found", className="alert-heading"),
+                        html.P(f"Found {len(shp_files)} shapefiles. Please upload a ZIP with only one shapefile."),
+                        html.Ul([html.Li(f.name) for f in shp_files])
+                    ], color="warning"), None
+                
+                shp_path = shp_files[0]
+                
+                # Verify required files exist
+                required_extensions = ['.shx', '.dbf']
+                missing = []
+                for ext in required_extensions:
+                    if not (shp_path.parent / (shp_path.stem + ext)).exists():
+                        missing.append(ext)
+                
+                if missing:
+                    return dbc.Alert([
+                        html.H5("Incomplete Shapefile", className="alert-heading"),
+                        html.P(f"Missing required files: {', '.join(missing)}")
+                    ], color="danger"), None
+                
+                status = dbc.Alert([
+                    html.I(className="fas fa-check-circle me-2"),
+                    f"Shapefile uploaded successfully!",
+                    html.Br(),
+                    html.Small(f"File: {shp_path.name}", className="text-muted")
+                ], color="success")
+                
+                return status, {
+                    "workspace": workspace,
+                    "upload_id": upload_id,
+                    "file_type": "shapefile",
+                    "file_path": str(shp_path)
+                }
+            
+            elif gdb_dirs:
+                # Geodatabase found
+                if len(gdb_dirs) > 1:
+                    return dbc.Alert([
+                        html.H5("Multiple Geodatabases Found", className="alert-heading"),
+                        html.P(f"Found {len(gdb_dirs)} geodatabases. Please upload a ZIP with only one .gdb folder."),
+                        html.Ul([html.Li(f.name) for f in gdb_dirs])
+                    ], color="warning"), None
+                
+                gdb_path = gdb_dirs[0]
+                
+                # List feature classes in the GDB
+                try:
+                    layers = fiona.listlayers(str(gdb_path))
+                except Exception as e:
+                    return dbc.Alert([
+                        html.H5("Error Reading Geodatabase", className="alert-heading"),
+                        html.P(str(e))
+                    ], color="danger"), None
+                
+                if len(layers) == 0:
+                    return dbc.Alert("No feature classes found in geodatabase", color="danger"), None
+                
+                if len(layers) > 1:
+                    layer_list = html.Ul([html.Li(layer) for layer in layers])
+                    return dbc.Alert([
+                        html.H5("Multiple Feature Classes Found", className="alert-heading"),
+                        html.P("The geodatabase contains multiple feature classes. Please upload a GDB with only one feature class."),
+                        html.P("Found feature classes:", className="mb-1"),
+                        layer_list
+                    ], color="warning"), None
+                
+                # Exactly one feature class - perfect!
+                fc_name = layers[0]
+                fc_path = str(gdb_path / fc_name)
+                
+                status = dbc.Alert([
+                    html.I(className="fas fa-check-circle me-2"),
+                    f"Geodatabase uploaded successfully!",
+                    html.Br(),
+                    html.Small(f"Feature class: {fc_name}", className="text-muted")
+                ], color="success")
+                
+                return status, {
+                    "workspace": workspace,
+                    "upload_id": upload_id,
+                    "file_type": "gdb",
+                    "file_path": fc_path,
+                    "gdb_path": str(gdb_path),
+                    "fc_name": fc_name
+                }
+            
+            else:
+                return dbc.Alert([
+                    html.H5("Invalid ZIP Content", className="alert-heading"),
+                    html.P("Could not find a shapefile (.shp) or geodatabase (.gdb) in the ZIP file."),
+                    html.P("Please ensure your ZIP contains either:"),
+                    html.Ul([
+                        html.Li("A shapefile with .shp, .shx, .dbf (and optionally .prj) files"),
+                        html.Li("A .gdb folder with geodatabase files")
+                    ])
+                ], color="danger"), None
         
         else:
             return dbc.Alert([
-                html.H5("Invalid ZIP Content", className="alert-heading"),
-                html.P("Could not find a shapefile (.shp) or geodatabase (.gdb) in the ZIP file."),
-                html.P("Please ensure your ZIP contains either:"),
+                html.H5("Unsupported File Format", className="alert-heading"),
+                html.P("Please upload one of the following:"),
                 html.Ul([
-                    html.Li("A shapefile with .shp, .shx, .dbf (and optionally .prj) files"),
-                    html.Li("A .gdb folder with geodatabase files")
+                    html.Li("ZIP file containing a shapefile"),
+                    html.Li("ZIP file containing a geodatabase (.gdb)"),
+                    html.Li("KML file (.kml)"),
+                    html.Li("KMZ file (.kmz)")
                 ])
             ], color="danger"), None
             
@@ -626,7 +721,7 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id,
             validation_errors.append("Parcel ID is required")
     elif input_source == "UPLOAD":
         if not uploaded_files:
-            validation_errors.append("Please upload a zipped shapefile or geodatabase")
+            validation_errors.append("Please upload a zipped shapefile or geodatabase or a KML/KMZ file")
     
     # Show validation errors
     if validation_errors:

@@ -159,7 +159,7 @@ class ASTProcessor:
         if self.config['input_source'] in ['UPLOAD', 'AOI', 'SHAPEFILE']:
             # Load from file (shapefile or feature class)
             aoi_path = self.config['aoi_file']
-            gdf_aoi = GeometryProcessor.esri_to_gdf(aoi_path)
+            gdf_aoi = GeometryProcessor.read_spatial_file(aoi_path)
         else:
             # Query from TANTALIS
             tantalis = self.config['tantalis']
