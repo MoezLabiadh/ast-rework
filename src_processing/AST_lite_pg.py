@@ -16,7 +16,7 @@ Arguments:   - Output location (workspace)
              - DB credentials for Oracle/BCGW and PostGIS
              - Input source: TANTALIS OR AOI
              - Region (west coast, skeena...)
-             - AOI: - ESRI shp or featureclass or kml/kmz (AOI) OR
+             - AOI: - ESRI shp or featureclass or KML/KMZ(AOI) OR
                     - TANTALIS File number
                     - TANTALIS Disposition ID
                     - TANTALIS Parcel ID
@@ -830,28 +830,41 @@ class MapGenerator:
     ) -> None:
         """
         Generate interactive HTML map showing AOI and intersecting features.
-        
-        Args:
-            gdf_aoi: AOI GeoDataFrame
-            gdf_intersect: Intersecting features GeoDataFrame
-            label_col: Column to use for labels
-            item_name: Name of dataset item
-            workspace: Output workspace directory
         """
         # Create base map
-        m = folium.Map(tiles='openstreetmap')
+        m = folium.Map(tiles=None)
+
         xmin, ymin, xmax, ymax = gdf_aoi.to_crs(4326)['geometry'].total_bounds
         m.fit_bounds([[ymin, xmin], [ymax, xmax]])
-        
-        # Add AOI layer
+
+        # --- Base maps ---
+        # OpenStreetMap (DEFAULT)
+        folium.TileLayer(
+            tiles='OpenStreetMap',
+            name='OpenStreetMap',
+            control=True,
+            show=True   # 👈 default basemap
+        ).add_to(m)
+
+        # Google Satellite (optional)
+        folium.TileLayer(
+            tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+            attr='Google',
+            name='Google Satellite',
+            overlay=False,
+            control=True,
+            show=False  # 👈 not default
+        ).add_to(m)
+
+        # --- AOI layer ---
         gdf_aoi.explore(
             m=m,
             tooltip=False,
             style_kwds=dict(fill=False, color="red", weight=3),
             name="AOI"
         )
-        
-        # Add intersection layer
+
+        # --- Intersection layer ---
         gdf_intersect.explore(
             m=m,
             column=label_col,
@@ -861,18 +874,9 @@ class MapGenerator:
             style_kwds=dict(color="gray"),
             name=item_name
         )
-        
-        # Add Google Satellite basemap
-        folium.TileLayer(
-            tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-            attr='Google',
-            name='Google Satellite',
-            overlay=False,
-            control=True
-        ).add_to(m)
-        
-        folium.LayerControl().add_to(m)
-        
+
+        folium.LayerControl(collapsed=False).add_to(m)
+
         # Save map
         maps_dir = os.path.join(workspace, 'maps')
         os.makedirs(maps_dir, exist_ok=True)
@@ -880,12 +884,13 @@ class MapGenerator:
         m.save(out_html)
 
 
+
 # ============================================================================
 # EXCEL REPORT GENERATION
 # ============================================================================
 
 class ExcelReportWriter:
-    """Writes analysis results to Excel format."""
+    """Writes analysis results to Excel format with improved formatting."""
     
     @staticmethod
     def write_report(
@@ -895,7 +900,7 @@ class ExcelReportWriter:
     ) -> None:
         """
         Write results to Excel spreadsheet.
-        
+
         Args:
             results: Dictionary of dataset results
             df_stat: Configuration DataFrame
@@ -952,6 +957,15 @@ class ExcelReportWriter:
         
         df_res = pd.DataFrame(expanded_rows)
         
+        # Forward-fill missing Category values
+        # Replace empty strings with NaN first, then forward fill
+        df_res['Category'] = df_res['Category'].replace('', pd.NA)
+        df_res['Category'] = df_res['Category'].ffill()
+        
+
+        # Fill empty "List of conflicts" with "No overlaps"
+        df_res['List of conflicts'] = df_res['List of conflicts'].replace('', 'No overlaps')
+        
         # Write to Excel
         filename = os.path.join(workspace, 'AST_lite_TAB3.xlsx')
         sheetname = 'Conflicts & Constraints'
@@ -962,9 +976,15 @@ class ExcelReportWriter:
             workbook = writer.book
             worksheet = writer.sheets[sheetname]
             
-            # Format columns
+            #Format columns
             txt_format = workbook.add_format({'text_wrap': True})
             lnk_format = workbook.add_format({'underline': True, 'font_color': 'blue'})
+            
+            # Conditional formatting for "No overlaps" text
+            no_overlaps_format = workbook.add_format({
+                'font_color': '#FF8C00',  # Dark orange
+                'text_wrap': True
+            })
             
             worksheet.set_column(0, 0, 30)
             worksheet.set_column(1, 1, 60)
@@ -979,6 +999,17 @@ class ExcelReportWriter:
                     'criteria': 'equal to',
                     'value': '"View Map"',
                     'format': lnk_format
+                }
+            )
+            
+            # Apply dark orange format to all "No overlaps" cells in column C
+            worksheet.conditional_format(
+                f'C2:C{df_res.shape[0] + 1}',
+                {
+                    'type': 'cell',
+                    'criteria': 'equal to',
+                    'value': '"No overlaps"',
+                    'format': no_overlaps_format
                 }
             )
             
@@ -1058,34 +1089,22 @@ class OverlayAnalyzer:
                     table, cols, col_lbl, def_query, radius, wkb_aoi, srid, region
                 )
             
-            # Process results
-            if isinstance(cols, str):
-                cols_list = [c.strip() for c in cols.split(",")]
-            else:
-                cols_list = cols
-            
-            # Handle result column - uppercase for Oracle, lowercase for PostGIS
-            if is_oracle:
-                result_col = 'RESULT'
-            else:
-                result_col = 'result'
-            
-            if result_col in df_result.columns:
-                cols_list.append(result_col)
-            
-            # Build final column list
-            available_result_cols = [col for col in cols_list if col in df_result.columns]
-            
-            if not available_result_cols and not df_result.empty:
+            # Build list of non-geometry columns actually returned
+            cols_list = [
+                c for c in df_result.columns
+                if c.lower() not in ('shape', 'geometry')
+            ]
+
+            # Remove duplicates while preserving order
+            cols_list = list(dict.fromkeys(cols_list))
+
+            if not cols_list and not df_result.empty:
                 print(f'.......WARNING: No valid columns found in results for {item}')
                 self.results[item] = pd.DataFrame([])
                 return
-            
-            if not df_result.empty:
-                df_all_res = df_result[available_result_cols]
-            else:
-                df_all_res = df_result
-            
+
+            df_all_res = df_result[cols_list] if not df_result.empty else df_result
+
             ov_nbr = df_all_res.shape[0]
             print(f'.....number of overlaps: {ov_nbr}')
             
@@ -1148,7 +1167,7 @@ class OverlayAnalyzer:
             geom_col=geom_col,
             def_query=clean_def_query
         )
-        
+
         # Handle coordinate transformation
         srid_mismatch = (srid_t == 1000003005)
         if srid_mismatch:
@@ -1328,7 +1347,7 @@ def main():
     # Configuration
     workspace = r"W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework"
     wksp_xls = os.path.join(workspace, 'input_spreadsheets')
-    aoi = os.path.join(workspace, 'test_data', 'aoi_test_3.kmz')
+    aoi = os.path.join(workspace, 'test_data', 'aoi_test_3.shp')
     out_wksp = os.path.join(workspace, 'outputs')
     
     # User inputs
