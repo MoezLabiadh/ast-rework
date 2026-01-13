@@ -5,12 +5,10 @@ AST Processor Module
 
 Wraps the original AST script logic for use with the web GUI.
 Provides progress callbacks and result aggregation.
-Updated to return AOI geometry data for web display.
 
 Author: Moez Labiadh - GeoBC
 
 Created: 2026-01-06
-Updated: 2026-01-08 - Added AOI geometry data to results
 """
 
 import os
@@ -22,6 +20,7 @@ from typing import Dict, Callable, Optional
 import pandas as pd
 
 # Import all the classes from your original script
+# You'll need to save the original script content in a file called ast_core.py
 from ast_core import (
     OracleConnection,
     PostGISConnection,
@@ -64,7 +63,6 @@ class ASTProcessor:
         self.postgis_conn = None
         self.results = {}
         self.failed_datasets = []
-        self.gdf_aoi = None  # Store AOI for web display
     
     def _update_progress(self, progress: int, message: str):
         """Update progress if callback is provided."""
@@ -87,12 +85,8 @@ class ASTProcessor:
                 - conflicts_found: number of datasets with conflicts
                 - conflict_counts: dict of conflict counts by dataset
                 - conflicts_by_category: list of dicts for display
-                - conflict_details: dict of actual conflict data for web display
                 - failed_datasets: number of failed datasets
-                - failed_details: list of failed dataset details
                 - output_file: path to Excel report
-                - workspace: workspace path
-                - gdf_aoi: GeoDataFrame of AOI for web map
         """
         try:
             # Setup workspace
@@ -116,7 +110,7 @@ class ASTProcessor:
             
             # Get AOI
             self._update_progress(20, "Loading Area of Interest...")
-            self.gdf_aoi, wkb_aoi, srid = self._load_aoi()
+            gdf_aoi, wkb_aoi, srid = self._load_aoi()
             
             # Read configuration
             self._update_progress(25, "Reading dataset configuration...")
@@ -124,7 +118,7 @@ class ASTProcessor:
             
             # Run analysis
             self._update_progress(30, "Starting overlay analysis...")
-            self._run_overlay_analysis(df_stat, wkb_aoi, srid, self.gdf_aoi, workspace, sql)
+            self._run_overlay_analysis(df_stat, wkb_aoi, srid, gdf_aoi, workspace, sql)
             
             # Write results
             self._update_progress(90, "Writing results to Excel...")
@@ -132,7 +126,7 @@ class ASTProcessor:
             
             # Aggregate results
             self._update_progress(95, "Finalizing results...")
-            results = self._aggregate_results(df_stat, output_file, workspace)
+            results = self._aggregate_results(df_stat, output_file)
             
             self._update_progress(100, "Analysis complete!")
             
@@ -210,6 +204,7 @@ class ASTProcessor:
     
     def _load_dataset_config(self) -> pd.DataFrame:
         """Load dataset configuration spreadsheets."""
+        # Default to the known path
         workspace_xls = self.config.get(
             'workspace_xls',
             r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets'
@@ -276,53 +271,26 @@ class ASTProcessor:
         
         return str(workspace / 'AST_lite_TAB3.xlsx')
     
-    def _aggregate_results(self, df_stat, output_file, workspace) -> Dict:
+    def _aggregate_results(self, df_stat, output_file) -> Dict:
         """Aggregate results for web display."""
         # Count conflicts by dataset
         conflict_counts = {}
         conflicts_found = 0
-        conflict_details = {}
         
         for item_name, result_df in self.results.items():
             count = result_df.shape[0]
             if count > 0:
                 conflict_counts[item_name] = count
                 conflicts_found += 1
-                
-                # Store conflict details for web display
-                conflict_details[item_name] = []
-                
-                # Get category from df_stat
-                df_match = df_stat[df_stat['Featureclass_Name(valid characters only)'] == item_name]
-                category = df_match['Category'].iloc[0] if not df_match.empty else 'Unknown'
-                
-                for _, row in result_df.iterrows():
-                    # Build detail string from all columns except geometry
-                    detail_parts = []
-                    for col in result_df.columns:
-                        if col.lower() not in ['shape', 'geometry', 'result']:
-                            val = row[col]
-                            # Handle different data types
-                            if pd.notna(val):
-                                if isinstance(val, (int, float)):
-                                    detail_parts.append(f"{col}: {val}")
-                                else:
-                                    detail_parts.append(f"{col}: {str(val)}")
-                    
-                    conflict_detail = {
-                        'category': category,
-                        'details': ' | '.join(detail_parts) if detail_parts else 'No details available'
-                    }
-                    conflict_details[item_name].append(conflict_detail)
         
-        # Group by category
+        # Group by category - matching Excel logic
         df_res = df_stat[['Category', 'Featureclass_Name(valid characters only)']].copy()
         df_res.rename(
             columns={'Featureclass_Name(valid characters only)': 'item'},
             inplace=True
         )
         
-        # Forward-fill missing Category values
+        # Forward-fill missing Category values (same as Excel)
         df_res['Category'] = df_res['Category'].replace('', pd.NA)
         df_res['Category'] = df_res['Category'].ffill()
         
@@ -333,6 +301,7 @@ class ASTProcessor:
             item = row['item']
             
             if item in conflict_counts:
+                # Add to category count
                 if category not in category_conflicts:
                     category_conflicts[category] = 0
                 category_conflicts[category] += conflict_counts[item]
@@ -348,12 +317,9 @@ class ASTProcessor:
             'conflicts_found': conflicts_found,
             'conflict_counts': conflict_counts,
             'conflicts_by_category': conflicts_by_category,
-            'conflict_details': conflict_details,  # New: actual conflict data
             'failed_datasets': len(self.failed_datasets),
-            'failed_details': self.failed_datasets,
-            'output_file': output_file,
-            'workspace': str(workspace),
-            'gdf_aoi': self.gdf_aoi  # New: AOI geometry for web map
+            'failed_details': self.failed_datasets,  # Include full details
+            'output_file': output_file
         }
     
     def _cleanup(self):
