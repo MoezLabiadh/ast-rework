@@ -10,7 +10,7 @@ Updated to return AOI geometry data for web display.
 Author: Moez Labiadh - GeoBC
 
 Created: 2026-01-06
-Updated: 2026-01-08 - Added AOI geometry data to results
+Updated: 2026-01-13
 """
 
 import os

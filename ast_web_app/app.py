@@ -1,7 +1,13 @@
 """
-app.py - AST LITE Web GUI Application
-Complete working version with web results display
+app.py
+
+AST LITE - Web GUI Application
+
+A Flask/Dash web interface for running the Automatic Status Tool.
+
 Author: Moez Labiadh
+
+Created: 2026-01-13
 """
 
 import os, shutil, threading, uuid, pickle, re
