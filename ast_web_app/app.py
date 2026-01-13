@@ -541,42 +541,127 @@ def full_report(job_id):
         with open(pkl, 'rb') as f:
             det = pickle.load(f)
     
-    return render_template_string(generate_html(job_id, r, det))
+    # Pass job_store data for AOI bounds
+    job_data = job_store[job_id]
+    return render_template_string(generate_html(job_id, r, det, job_data))
 
-def generate_html(job_id, res, det):
+def generate_html(job_id, res, det, job_data=None):
     total = sum(res.get('conflict_counts', {}).values())
     failed = res.get('failed_datasets', 0)
     workspace = res.get('workspace', '.')
     maps_dir = Path(workspace) / 'maps'
     
-    # Build detailed conflicts table
-    rows = ""
-    if 'conflict_details' in res and res['conflict_details']:
-        for item, confs in res['conflict_details'].items():
-            category = ""
-            for c in confs:
-                if not category:
-                    category = c.get("category", "N/A")
-                details = c.get("details", "")
-                rows += f'<tr><td>{category}</td><td>{item}</td><td>{details}</td></tr>'
+    # Get AOI bounds if available
+    aoi_bounds = None
+    if job_data and 'aoi_bounds' in job_data:
+        aoi_bounds = job_data['aoi_bounds']
     
-    # Try to read the comprehensive map (first map file found)
+    # Build comprehensive table showing all datasets
+    rows = ""
+    
+    # If we have the new all_datasets structure, use it
+    if 'all_datasets' in res and res['all_datasets']:
+        for dataset in res['all_datasets']:
+            category = dataset.get('category', 'N/A')
+            item = dataset.get('item', 'Unknown')
+            status = dataset.get('status', 'unknown')
+            
+            if status == 'conflict' and item in res.get('conflict_details', {}):
+                # Show each conflict as a separate row
+                for conf in res['conflict_details'][item]:
+                    details = conf.get('details', 'No details available')
+                    rows += f'<tr><td>{category}</td><td>{item}</td><td>{details}</td></tr>'
+            elif status == 'no_overlap':
+                # Show "No overlaps" for datasets with no conflicts
+                rows += f'<tr><td>{category}</td><td>{item}</td><td class="text-success"><em>No overlaps</em></td></tr>'
+    else:
+        # Fallback to old method (only conflicts)
+        if 'conflict_details' in res and res['conflict_details']:
+            for item, confs in res['conflict_details'].items():
+                category = ""
+                for c in confs:
+                    if not category:
+                        category = c.get("category", "N/A")
+                    details = c.get("details", "")
+                    rows += f'<tr><td>{category}</td><td>{item}</td><td>{details}</td></tr>'
+    
+    # Build map tabs for all generated maps
     map_html = ""
-    map_file_path = None
+    map_tabs = ""
+    map_content = ""
     
     if maps_dir.exists():
-        map_files = list(maps_dir.glob('*.html'))
+        map_files = sorted(list(maps_dir.glob('*.html')))
         if map_files:
-            # Use the first map file found
-            map_file_path = map_files[0]
-            # Create an iframe to embed the map instead of extracting HTML
-            # This avoids conflicts with Folium's internal JavaScript and CSS
-            relative_path = f'/map/{job_id}/{map_file_path.name}'
+            # Create tabs for each map
+            for idx, map_file in enumerate(map_files):
+                dataset_name = map_file.stem  # filename without extension
+                tab_id = f"map-{idx}"
+                active_class = "active" if idx == 0 else ""
+                
+                # Create tab button
+                map_tabs += f'''
+                    <button class="nav-link {active_class}" id="{tab_id}-tab" data-bs-toggle="tab" 
+                            data-bs-target="#{tab_id}" type="button" role="tab">
+                        {dataset_name}
+                    </button>
+                '''
+                
+                # Create tab content with lazy loading
+                relative_path = f'/map/{job_id}/{map_file.name}'
+                # Only load the first map immediately, lazy load others
+                if idx == 0:
+                    map_content += f'''
+                    <div class="tab-pane fade show active" id="{tab_id}" role="tabpanel">
+                        <iframe id="{tab_id}-iframe" src="{relative_path}" 
+                                style="width: 100%; height: 600px; border: none;" 
+                                allowfullscreen>
+                        </iframe>
+                    </div>
+                    '''
+                else:
+                    # Use data-src for lazy loading
+                    map_content += f'''
+                    <div class="tab-pane fade" id="{tab_id}" role="tabpanel">
+                        <iframe id="{tab_id}-iframe" data-src="{relative_path}" 
+                                style="width: 100%; height: 600px; border: none;" 
+                                allowfullscreen>
+                        </iframe>
+                    </div>
+                    '''
+            
             map_html = f'''
-                <iframe src="{relative_path}" 
-                        style="width: 100%; height: 100%; border: none;" 
-                        allowfullscreen>
-                </iframe>
+                <nav>
+                    <div class="nav nav-tabs" id="nav-tab" role="tablist">
+                        {map_tabs}
+                    </div>
+                </nav>
+                <div class="tab-content" id="nav-tabContent">
+                    {map_content}
+                </div>
+                <script>
+                // Lazy load iframes when tabs are shown
+                document.addEventListener('DOMContentLoaded', function() {{
+                    var triggerTabList = [].slice.call(document.querySelectorAll('#nav-tab button'));
+                    triggerTabList.forEach(function(triggerEl) {{
+                        triggerEl.addEventListener('shown.bs.tab', function(event) {{
+                            // Get the target pane
+                            var target = event.target.getAttribute('data-bs-target');
+                            var pane = document.querySelector(target);
+                            
+                            if (pane) {{
+                                var iframe = pane.querySelector('iframe');
+                                
+                                // If iframe has data-src but not src, load it now
+                                if (iframe && iframe.hasAttribute('data-src') && !iframe.hasAttribute('src')) {{
+                                    iframe.setAttribute('src', iframe.getAttribute('data-src'));
+                                    iframe.removeAttribute('data-src');
+                                }}
+                            }}
+                        }});
+                    }});
+                }});
+                </script>
             '''
     
     if not map_html:
@@ -595,8 +680,11 @@ def generate_html(job_id, res, det):
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         body {{ font-family: Arial, sans-serif; background-color: #f8f9fa; }}
-        .map-container {{ height: 600px; border: 2px solid #dee2e6; border-radius: 8px; overflow: hidden; }}
+        .map-container {{ border: 2px solid #dee2e6; border-radius: 8px; overflow: hidden; background: white; }}
         .table {{ background-color: white; }}
+        .nav-tabs .nav-link {{ color: #495057; }}
+        .nav-tabs .nav-link.active {{ color: #0d6efd; font-weight: bold; }}
+        .tab-content {{ padding: 0; }}
     </style>
 </head>
 <body>
@@ -634,7 +722,8 @@ def generate_html(job_id, res, det):
         
         <div class="card mb-4">
             <div class="card-header bg-dark text-white">
-                <h4 class="mb-0"><i class="fas fa-table me-2"></i>Detailed Conflicts</h4>
+                <h4 class="mb-0"><i class="fas fa-table me-2"></i>Analysis Results - All Datasets</h4>
+                <small>Showing all analyzed datasets with conflict details or "No overlaps" status</small>
             </div>
             <div class="card-body">
                 <div class="table-responsive">
@@ -643,7 +732,7 @@ def generate_html(job_id, res, det):
                             <tr>
                                 <th>Category</th>
                                 <th>Dataset</th>
-                                <th>Conflict Details</th>
+                                <th>Details / Status</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -656,6 +745,7 @@ def generate_html(job_id, res, det):
         
         {failed_section}
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 '''

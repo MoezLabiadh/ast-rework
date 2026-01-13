@@ -282,55 +282,78 @@ class ASTProcessor:
         conflict_counts = {}
         conflicts_found = 0
         conflict_details = {}
+        all_datasets = []  # New: Store all datasets with their status
         
-        for item_name, result_df in self.results.items():
-            count = result_df.shape[0]
-            if count > 0:
-                conflict_counts[item_name] = count
-                conflicts_found += 1
+        # Forward-fill missing Category values in df_stat
+        df_stat_copy = df_stat[['Category', 'Featureclass_Name(valid characters only)']].copy()
+        df_stat_copy['Category'] = df_stat_copy['Category'].replace('', pd.NA)
+        df_stat_copy['Category'] = df_stat_copy['Category'].ffill()
+        
+        # Process all datasets
+        for idx, row in df_stat_copy.iterrows():
+            category = row['Category']
+            item_name = row['Featureclass_Name(valid characters only)']
+            
+            # Check if this dataset has conflicts
+            if item_name in self.results:
+                result_df = self.results[item_name]
+                count = result_df.shape[0]
                 
-                # Store conflict details for web display
-                conflict_details[item_name] = []
-                
-                # Get category from df_stat
-                df_match = df_stat[df_stat['Featureclass_Name(valid characters only)'] == item_name]
-                category = df_match['Category'].iloc[0] if not df_match.empty else 'Unknown'
-                
-                for _, row in result_df.iterrows():
-                    # Build detail string from all columns except geometry
-                    detail_parts = []
-                    for col in result_df.columns:
-                        if col.lower() not in ['shape', 'geometry', 'result']:
-                            val = row[col]
-                            # Handle different data types
-                            if pd.notna(val):
-                                if isinstance(val, (int, float)):
-                                    detail_parts.append(f"{col}: {val}")
-                                else:
-                                    detail_parts.append(f"{col}: {str(val)}")
+                if count > 0:
+                    conflict_counts[item_name] = count
+                    conflicts_found += 1
                     
-                    conflict_detail = {
+                    # Store conflict details for web display
+                    conflict_details[item_name] = []
+                    
+                    for _, result_row in result_df.iterrows():
+                        # Build detail string from all columns except geometry
+                        detail_parts = []
+                        for col in result_df.columns:
+                            if col.lower() not in ['shape', 'geometry', 'result']:
+                                val = result_row[col]
+                                # Handle different data types
+                                if pd.notna(val):
+                                    if isinstance(val, (int, float)):
+                                        detail_parts.append(f"{col}: {val}")
+                                    else:
+                                        detail_parts.append(f"{col}: {str(val)}")
+                        
+                        conflict_detail = {
+                            'category': category,
+                            'details': ' | '.join(detail_parts) if detail_parts else 'No details available'
+                        }
+                        conflict_details[item_name].append(conflict_detail)
+                    
+                    # Add to all_datasets list
+                    all_datasets.append({
                         'category': category,
-                        'details': ' | '.join(detail_parts) if detail_parts else 'No details available'
-                    }
-                    conflict_details[item_name].append(conflict_detail)
-        
-        # Group by category
-        df_res = df_stat[['Category', 'Featureclass_Name(valid characters only)']].copy()
-        df_res.rename(
-            columns={'Featureclass_Name(valid characters only)': 'item'},
-            inplace=True
-        )
-        
-        # Forward-fill missing Category values
-        df_res['Category'] = df_res['Category'].replace('', pd.NA)
-        df_res['Category'] = df_res['Category'].ffill()
+                        'item': item_name,
+                        'status': 'conflict',
+                        'count': count
+                    })
+                else:
+                    # Dataset was analyzed but has no conflicts
+                    all_datasets.append({
+                        'category': category,
+                        'item': item_name,
+                        'status': 'no_overlap',
+                        'count': 0
+                    })
+            else:
+                # Dataset was not in results (shouldn't happen but handle it)
+                all_datasets.append({
+                    'category': category,
+                    'item': item_name,
+                    'status': 'no_overlap',
+                    'count': 0
+                })
         
         # Count conflicts by category
         category_conflicts = {}
-        for _, row in df_res.iterrows():
+        for _, row in df_stat_copy.iterrows():
             category = row['Category']
-            item = row['item']
+            item = row['Featureclass_Name(valid characters only)']
             
             if item in conflict_counts:
                 if category not in category_conflicts:
@@ -348,12 +371,13 @@ class ASTProcessor:
             'conflicts_found': conflicts_found,
             'conflict_counts': conflict_counts,
             'conflicts_by_category': conflicts_by_category,
-            'conflict_details': conflict_details,  # New: actual conflict data
+            'conflict_details': conflict_details,  # Detailed conflict data
+            'all_datasets': all_datasets,  # New: All datasets with status
             'failed_datasets': len(self.failed_datasets),
             'failed_details': self.failed_datasets,
             'output_file': output_file,
             'workspace': str(workspace),
-            'gdf_aoi': self.gdf_aoi  # New: AOI geometry for web map
+            'gdf_aoi': self.gdf_aoi  # AOI geometry for web map
         }
     
     def _cleanup(self):
