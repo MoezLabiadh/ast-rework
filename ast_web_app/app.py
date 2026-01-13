@@ -107,7 +107,7 @@ app.layout = html.Div([
                             dcc.Upload(id='upload-file', children=html.Div([
                                 html.I(className="fas fa-cloud-upload-alt fa-2x mb-2"), html.Br(),
                                 "Drag and Drop or ", html.A('Select File'), html.Br(),
-                                html.Small('(Shapefile/GDB zip, KML/KMZ)')
+                                html.Small('Supported files: Zipped Shapefile or Geodatabases (*.zip), KML, KMZ')
                             ]), style={'width':'100%','height':'140px','borderWidth':'2px',
                                 'borderStyle':'dashed','borderRadius':'10px','textAlign':'center',
                                 'backgroundColor':'#f8f9fa','display':'flex','alignItems':'center',
@@ -253,14 +253,24 @@ def handle_upload(contents, filename, workspace):
             if shp:
                 if len(shp) > 1:
                     return dbc.Alert("Multiple shapefiles found", color="warning"), None
-                return dbc.Alert("Shapefile uploaded!", color="success"), {
+                # Get shapefile layer name (filename without extension)
+                layer_name = shp[0].stem
+                return dbc.Alert([
+                    html.I(className="fas fa-check-circle me-2"),
+                    "Shapefile uploaded successfully!", html.Br(),
+                    html.Small(f"Layer: {layer_name}", className="text-muted")
+                ], color="success"), {
                     "workspace": workspace, "file_type": "shapefile", "file_path": str(shp[0])}
             
             elif gdb:
                 layers = fiona.listlayers(str(gdb[0]))
                 if len(layers) != 1:
                     return dbc.Alert("GDB must have 1 feature class", color="warning"), None
-                return dbc.Alert("GDB uploaded!", color="success"), {
+                return dbc.Alert([
+                    html.I(className="fas fa-check-circle me-2"),
+                    "Geodatabase uploaded successfully!", html.Br(),
+                    html.Small(f"Layer: {layers[0]}", className="text-muted")
+                ], color="success"), {
                     "workspace": workspace, "file_type": "gdb", 
                     "file_path": str(gdb[0] / layers[0]), "gdb_path": str(gdb[0]), "fc_name": layers[0]}
         
@@ -346,7 +356,31 @@ def update_progress(n, job_id):
         return job['progress'], "⊗ Cancelled", "", \
             dbc.Alert("Cancelled", color="warning"), False, True, True
     elif job['status'] == 'completed':
-        return 100, "✓ Complete", "", create_preview(job['results'], job_id, job), False, True, True
+        # Format execution time for progress text
+        progress_text_complete = html.Div([
+            html.Div("✓ Complete", className="text-success fw-bold mb-2")
+        ])
+        
+        # Create execution time info box
+        exec_time_box = None
+        if 'execution_time' in job:
+            et = job['execution_time']
+            time_parts = []
+            if et['hours'] > 0:
+                time_parts.append(f"{et['hours']}h")
+            if et['minutes'] > 0:
+                time_parts.append(f"{et['minutes']}m")
+            if et['seconds'] > 0 or not time_parts:
+                time_parts.append(f"{et['seconds']}s")
+            exec_time_str = " ".join(time_parts)
+            exec_time_box = dbc.Alert([
+                html.I(className="fas fa-info-circle me-2"),
+                f"Execution time: {exec_time_str}"
+            ], color="info", className="mt-2 mb-0")
+        
+        dataset_status_content = exec_time_box if exec_time_box else ""
+        
+        return 100, progress_text_complete, dataset_status_content, create_preview(job['results'], job_id, job), False, True, True
     elif job['status'] == 'error':
         return job['progress'], "✗ Error", "", \
             dbc.Alert([html.H5("Error"), html.P(str(job['error']))], color="danger"), False, True, True
@@ -361,44 +395,24 @@ def create_preview(results, job_id, job=None):
     total = sum(results.get('conflict_counts', {}).values())
     failed = results.get('failed_datasets', 0)
     
-    # Get execution time if available
-    exec_time_display = None
-    if job and 'execution_time' in job:
-        et = job['execution_time']
-        hours = et['hours']
-        minutes = et['minutes']
-        seconds = et['seconds']
-        
-        # Format time string
-        time_parts = []
-        if hours > 0:
-            time_parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
-        if minutes > 0:
-            time_parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
-        if seconds > 0 or not time_parts:  # Always show seconds if it's the only unit
-            time_parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
-        
-        exec_time_str = ", ".join(time_parts)
-        
-        exec_time_display = dbc.Alert([
-            html.I(className="fas fa-clock me-2"),
-            html.Strong("Execution Time: "),
-            html.Span(exec_time_str)
-        ], color="info", className="mb-3")
-    
-    # Summary cards
+    # Summary cards with icons
     cards = dbc.Row([
         dbc.Col([dbc.Card([dbc.CardBody([
-            html.H3(results['total_datasets'], className="text-primary"),
-            html.P("Datasets Analyzed", className="mb-0")
+            html.I(className="fas fa-database fa-2x text-primary mb-2"),
+            html.H3(results['total_datasets'], className="text-primary mb-1"),
+            html.P("Datasets Analyzed", className="mb-0 small")
         ])], className="text-center")], md=4),
         dbc.Col([dbc.Card([dbc.CardBody([
-            html.H3(total, className="text-danger" if total > 0 else "text-success"),
-            html.P("Total Conflicts", className="mb-0")
+            html.I(className="fas fa-shield-alt fa-2x mb-2", 
+                   style={"color": "#dc3545" if total > 0 else "#28a745"}),
+            html.H3(total, className="text-danger mb-1" if total > 0 else "text-success mb-1"),
+            html.P("Total Conflicts", className="mb-0 small")
         ])], className="text-center")], md=4),
         dbc.Col([dbc.Card([dbc.CardBody([
-            html.H3(failed, className="text-warning" if failed > 0 else "text-muted"),
-            html.P("Failed Datasets", className="mb-0")
+            html.I(className="fas fa-exclamation-triangle fa-2x mb-2",
+                   style={"color": "#ffc107" if failed > 0 else "#6c757d"}),
+            html.H3(failed, className="text-warning mb-1" if failed > 0 else "text-muted mb-1"),
+            html.P("Failed Datasets", className="mb-0 small")
         ])], className="text-center")], md=4),
     ], className="mb-3")
     
@@ -428,25 +442,101 @@ def create_preview(results, job_id, job=None):
             html.Ul(failed_items, className="mb-0")
         ], color="warning", className="mb-3")
     
-    # Conflicts by category table
+    # Conflicts by dataset and category table
     table = None
-    if total > 0 and 'conflicts_by_category' in results:
-        table = html.Div([
-            html.H5("Conflicts by Category", className="mb-3"),
-            dash_table.DataTable(
-                data=results.get('conflicts_by_category', []),
-                columns=[{"name": "Category", "id": "category"}, {"name": "Count", "id": "count"}],
-                style_cell={'textAlign': 'left'},
-                style_header={'fontWeight': 'bold', 'backgroundColor': '#f8f9fa'}
+    if total > 0 and 'all_datasets' in results:
+        # Build grouped table data
+        all_datasets = results['all_datasets']
+        
+        # Group datasets by category
+        from collections import OrderedDict
+        grouped = OrderedDict()
+        for ds in all_datasets:
+            if ds['status'] == 'conflict':  # Only show datasets with conflicts
+                cat = ds['category']
+                if cat not in grouped:
+                    grouped[cat] = []
+                grouped[cat].append({
+                    'dataset': ds['item'],
+                    'count': ds['count']
+                })
+        
+        # Function to get color based on conflict count (yellow -> orange -> red)
+        def get_conflict_color(count):
+            if count < 5:
+                # Yellow shades
+                return "#ffd700"  # Gold
+            elif count < 8:
+                # Yellow-orange transition
+                return "#ffb700"  # Amber
+            elif count < 10:
+                # Orange shades
+                return "#ff8c00"  # Dark orange
+            elif count < 15:
+                # Orange-red transition
+                return "#ff6b35"  # Coral
+            else:
+                # Red shades
+                return "#dc3545"  # Bootstrap danger red
+        
+        # Build HTML table manually for better styling
+        table_rows = []
+        for category, datasets in grouped.items():
+            # Category header row
+            table_rows.append(
+                html.Tr([
+                    html.Td(
+                        html.Strong(category, className="text-primary"),
+                        colSpan=2,
+                        className="bg-light",
+                        style={'fontSize': '1.1em', 'padding': '12px'}
+                    )
+                ])
             )
+            # Dataset rows
+            for ds in datasets:
+                color = get_conflict_color(ds['count'])
+                table_rows.append(
+                    html.Tr([
+                        html.Td(ds['dataset'], style={'paddingLeft': '30px'}),
+                        html.Td(
+                            html.Span(
+                                ds['count'],
+                                className="badge",
+                                style={'backgroundColor': color, 'color': 'white'}
+                            ),
+                            style={'textAlign': 'center', 'width': '100px'}
+                        )
+                    ])
+                )
+        
+        table = html.Div([
+            html.Div([
+                html.H5([
+                    html.I(className="fas fa-list-ul me-2"),
+                    "Summary of Conflicts"
+                ], className="mb-1"),
+                html.Small("Click on Open Full Report for details", className="text-muted")
+            ], className="mb-3"),
+            html.Div([
+                html.Table([
+                    html.Thead([
+                        html.Tr([
+                            html.Th("Dataset", style={'width': '70%'}),
+                            html.Th("Number of Overlaps", style={'width': '30%', 'textAlign': 'center'})
+                        ])
+                    ], className="table-light"),
+                    html.Tbody(table_rows)
+                ], className="table table-sm table-hover")
+            ], style={'maxHeight': '500px', 'overflowY': 'auto', 'border': '1px solid #dee2e6', 'borderRadius': '4px'})
         ])
     else:
-        table = dbc.Alert("No conflicts detected!", color="success", className="mt-3")
+        table = dbc.Alert([
+            html.I(className="fas fa-check-circle me-2"),
+            "No conflicts detected!"
+        ], color="success", className="mt-3")
     
-    components = [cards]
-    if exec_time_display:
-        components.append(exec_time_display)
-    components.append(buttons)
+    components = [cards, buttons]
     if failed_details:
         components.append(failed_details)
     components.append(table)
