@@ -224,10 +224,93 @@ def handle_upload(contents, filename, workspace):
             layers = fiona.listlayers(str(kml_path))
             if not layers:
                 return dbc.Alert("No layers found in KML", color="danger"), None
+            
+            # Read KML using XML parser (doesn't require KML driver)
+            import geopandas as gpd
+            import xml.etree.ElementTree as ET
+            from shapely.geometry import Polygon, Point, LineString
+            
+            try:
+                print(f"Reading KML with XML parser: {kml_path}")
+                
+                # Parse KML as XML
+                tree = ET.parse(str(kml_path))
+                root = tree.getroot()
+                
+                # Handle KML namespace
+                ns = {'kml': 'http://www.opengis.net/kml/2.2'}
+                if not root.tag.startswith('{'):
+                    ns = {'kml': ''}
+                
+                geometries = []
+                
+                # Find all Placemarks
+                placemarks = root.findall('.//kml:Placemark', ns) if ns['kml'] else root.findall('.//Placemark')
+                for placemark in placemarks:
+                    # Try Polygon
+                    polygon = placemark.find('.//kml:Polygon' if ns['kml'] else './/Polygon', ns)
+                    if polygon is not None:
+                        outer = polygon.find('.//kml:outerBoundaryIs//kml:coordinates' if ns['kml'] else './/outerBoundaryIs//coordinates', ns)
+                        if outer is not None and outer.text:
+                            coords = []
+                            for coord in outer.text.strip().split():
+                                parts = coord.split(',')
+                                if len(parts) >= 2:
+                                    coords.append((float(parts[0]), float(parts[1])))
+                            if len(coords) >= 3:
+                                geometries.append(Polygon(coords))
+                                continue
+                    
+                    # Try Point
+                    point = placemark.find('.//kml:Point' if ns['kml'] else './/Point', ns)
+                    if point is not None:
+                        coords_elem = point.find('.//kml:coordinates' if ns['kml'] else './/coordinates', ns)
+                        if coords_elem is not None and coords_elem.text:
+                            parts = coords_elem.text.strip().split(',')
+                            if len(parts) >= 2:
+                                geometries.append(Point(float(parts[0]), float(parts[1])))
+                                continue
+                    
+                    # Try LineString
+                    line = placemark.find('.//kml:LineString' if ns['kml'] else './/LineString', ns)
+                    if line is not None:
+                        coords_elem = line.find('.//kml:coordinates' if ns['kml'] else './/coordinates', ns)
+                        if coords_elem is not None and coords_elem.text:
+                            coords = []
+                            for coord in coords_elem.text.strip().split():
+                                parts = coord.split(',')
+                                if len(parts) >= 2:
+                                    coords.append((float(parts[0]), float(parts[1])))
+                            if len(coords) >= 2:
+                                geometries.append(LineString(coords))
+                
+                if not geometries:
+                    raise Exception("No geometries found")
+                
+                # Create GeoDataFrame
+                gdf = gpd.GeoDataFrame(geometry=geometries, crs='EPSG:4326')
+                geom_type = gdf.geometry.geom_type.iloc[0]
+                print(f"Found {len(geometries)} features, type: {geom_type}")
+                
+                # Calculate area for polygons
+                if geom_type in ['Polygon', 'MultiPolygon']:
+                    gdf_proj = gdf.to_crs(epsg=3005)
+                    area_m2 = gdf_proj.geometry.area.sum()
+                    area_ha = area_m2 / 10000
+                    info_text = f"Layer: {layers[0]} | Type: {geom_type} | Area: {area_ha:.2f} ha"
+                else:
+                    info_text = f"Layer: {layers[0]} | Type: {geom_type}"
+                
+                print(f"Success: {info_text}")
+                
+            except Exception as e:
+                print(f"KML read error: {type(e).__name__}: {str(e)}")
+                info_text = f"Layer: {layers[0]} (could not read geometry info)"
+            
             return dbc.Alert([
                 html.I(className="fas fa-check-circle me-2"),
                 "KML file uploaded successfully!", html.Br(),
-                html.Small(f"Layer: {layers[0]}", className="text-muted")
+                html.Small(info_text, className="text-muted")
             ], color="success"), {
                 "workspace": workspace, "upload_id": upload_id, "file_type": "kml",
                 "file_path": str(kml_path), "layer_name": layers[0]}
@@ -241,10 +324,93 @@ def handle_upload(contents, filename, workspace):
             layers = fiona.listlayers(str(kml_files[0]))
             if not layers:
                 return dbc.Alert("No layers found in KML", color="danger"), None
+            
+            # Read KML using XML parser (doesn't require KML driver)
+            import geopandas as gpd
+            import xml.etree.ElementTree as ET
+            from shapely.geometry import Polygon, Point, LineString
+            
+            try:
+                print(f"Reading KMZ with XML parser: {kml_files[0]}")
+                
+                # Parse KML as XML
+                tree = ET.parse(str(kml_files[0]))
+                root = tree.getroot()
+                
+                # Handle KML namespace
+                ns = {'kml': 'http://www.opengis.net/kml/2.2'}
+                if not root.tag.startswith('{'):
+                    ns = {'kml': ''}
+                
+                geometries = []
+                
+                # Find all Placemarks
+                placemarks = root.findall('.//kml:Placemark', ns) if ns['kml'] else root.findall('.//Placemark')
+                for placemark in placemarks:
+                    # Try Polygon
+                    polygon = placemark.find('.//kml:Polygon' if ns['kml'] else './/Polygon', ns)
+                    if polygon is not None:
+                        outer = polygon.find('.//kml:outerBoundaryIs//kml:coordinates' if ns['kml'] else './/outerBoundaryIs//coordinates', ns)
+                        if outer is not None and outer.text:
+                            coords = []
+                            for coord in outer.text.strip().split():
+                                parts = coord.split(',')
+                                if len(parts) >= 2:
+                                    coords.append((float(parts[0]), float(parts[1])))
+                            if len(coords) >= 3:
+                                geometries.append(Polygon(coords))
+                                continue
+                    
+                    # Try Point
+                    point = placemark.find('.//kml:Point' if ns['kml'] else './/Point', ns)
+                    if point is not None:
+                        coords_elem = point.find('.//kml:coordinates' if ns['kml'] else './/coordinates', ns)
+                        if coords_elem is not None and coords_elem.text:
+                            parts = coords_elem.text.strip().split(',')
+                            if len(parts) >= 2:
+                                geometries.append(Point(float(parts[0]), float(parts[1])))
+                                continue
+                    
+                    # Try LineString
+                    line = placemark.find('.//kml:LineString' if ns['kml'] else './/LineString', ns)
+                    if line is not None:
+                        coords_elem = line.find('.//kml:coordinates' if ns['kml'] else './/coordinates', ns)
+                        if coords_elem is not None and coords_elem.text:
+                            coords = []
+                            for coord in coords_elem.text.strip().split():
+                                parts = coord.split(',')
+                                if len(parts) >= 2:
+                                    coords.append((float(parts[0]), float(parts[1])))
+                            if len(coords) >= 2:
+                                geometries.append(LineString(coords))
+                
+                if not geometries:
+                    raise Exception("No geometries found")
+                
+                # Create GeoDataFrame
+                gdf = gpd.GeoDataFrame(geometry=geometries, crs='EPSG:4326')
+                geom_type = gdf.geometry.geom_type.iloc[0]
+                print(f"Found {len(geometries)} features, type: {geom_type}")
+                
+                # Calculate area for polygons
+                if geom_type in ['Polygon', 'MultiPolygon']:
+                    gdf_proj = gdf.to_crs(epsg=3005)
+                    area_m2 = gdf_proj.geometry.area.sum()
+                    area_ha = area_m2 / 10000
+                    info_text = f"Layer: {layers[0]} | Type: {geom_type} | Area: {area_ha:.2f} ha"
+                else:
+                    info_text = f"Layer: {layers[0]} | Type: {geom_type}"
+                
+                print(f"Success: {info_text}")
+                
+            except Exception as e:
+                print(f"KMZ read error: {type(e).__name__}: {str(e)}")
+                info_text = f"Layer: {layers[0]} (could not read geometry info)"
+            
             return dbc.Alert([
                 html.I(className="fas fa-check-circle me-2"),
                 "KMZ file uploaded successfully!", html.Br(),
-                html.Small(f"Layer: {layers[0]}", className="text-muted")
+                html.Small(info_text, className="text-muted")
             ], color="success"), {
                 "workspace": workspace, "upload_id": upload_id, "file_type": "kmz",
                 "file_path": str(kml_files[0]), "layer_name": layers[0]}
@@ -259,12 +425,40 @@ def handle_upload(contents, filename, workspace):
             if shp:
                 if len(shp) > 1:
                     return dbc.Alert("Multiple shapefiles found", color="warning"), None
-                # Get shapefile layer name (filename without extension)
+                
+                # Get shapefile info
                 layer_name = shp[0].stem
+                
+                # Read geometry info using geopandas
+                import geopandas as gpd
+                try:
+                    gdf = gpd.read_file(str(shp[0]))
+                    
+                    # Get geometry type
+                    geom_type = gdf.geometry.geom_type.iloc[0] if len(gdf) > 0 else "Unknown"
+                    
+                    # Calculate area in hectares (if polygon)
+                    if geom_type in ['Polygon', 'MultiPolygon']:
+                        # Reproject to appropriate CRS for area calculation if needed
+                        if gdf.crs and gdf.crs.is_geographic:
+                            # Use BC Albers (EPSG:3005) for area calculation
+                            gdf_proj = gdf.to_crs(epsg=3005)
+                        else:
+                            gdf_proj = gdf
+                        
+                        area_m2 = gdf_proj.geometry.area.sum()
+                        area_ha = area_m2 / 10000  # Convert m² to hectares
+                        
+                        info_text = f"Layer: {layer_name} | Type: {geom_type} | Area: {area_ha:.2f} ha"
+                    else:
+                        info_text = f"Layer: {layer_name} | Type: {geom_type}"
+                except Exception as e:
+                    info_text = f"Layer: {layer_name} (could not read geometry info)"
+                
                 return dbc.Alert([
                     html.I(className="fas fa-check-circle me-2"),
                     "Shapefile uploaded successfully!", html.Br(),
-                    html.Small(f"Layer: {layer_name}", className="text-muted")
+                    html.Small(info_text, className="text-muted")
                 ], color="success"), {
                     "workspace": workspace, "file_type": "shapefile", "file_path": str(shp[0])}
             
@@ -272,10 +466,37 @@ def handle_upload(contents, filename, workspace):
                 layers = fiona.listlayers(str(gdb[0]))
                 if len(layers) != 1:
                     return dbc.Alert("GDB must have 1 feature class", color="warning"), None
+                
+                # Read GDB info using geopandas
+                import geopandas as gpd
+                try:
+                    gdf = gpd.read_file(str(gdb[0]), layer=layers[0])
+                    
+                    # Get geometry type
+                    geom_type = gdf.geometry.geom_type.iloc[0] if len(gdf) > 0 else "Unknown"
+                    
+                    # Calculate area in hectares (if polygon)
+                    if geom_type in ['Polygon', 'MultiPolygon']:
+                        # Reproject to appropriate CRS for area calculation if needed
+                        if gdf.crs and gdf.crs.is_geographic:
+                            # Use BC Albers (EPSG:3005) for area calculation
+                            gdf_proj = gdf.to_crs(epsg=3005)
+                        else:
+                            gdf_proj = gdf
+                        
+                        area_m2 = gdf_proj.geometry.area.sum()
+                        area_ha = area_m2 / 10000  # Convert m² to hectares
+                        
+                        info_text = f"Layer: {layers[0]} | Type: {geom_type} | Area: {area_ha:.2f} ha"
+                    else:
+                        info_text = f"Layer: {layers[0]} | Type: {geom_type}"
+                except Exception as e:
+                    info_text = f"Layer: {layers[0]} (could not read geometry info)"
+                
                 return dbc.Alert([
                     html.I(className="fas fa-check-circle me-2"),
                     "Geodatabase uploaded successfully!", html.Br(),
-                    html.Small(f"Layer: {layers[0]}", className="text-muted")
+                    html.Small(info_text, className="text-muted")
                 ], color="success"), {
                     "workspace": workspace, "file_type": "gdb", 
                     "file_path": str(gdb[0] / layers[0]), "gdb_path": str(gdb[0]), "fc_name": layers[0]}
