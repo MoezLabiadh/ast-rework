@@ -456,19 +456,40 @@ class OracleUtils:
             return []
     
     @staticmethod
-    def apply_geometry_validation(query: str, table: str, geom_col: str) -> str:
-        """Apply geometry validation filter for problematic Oracle tables."""
+    def apply_geometry_fix(query: str, table: str, geom_col: str) -> str:
+        """Apply geometry densification and rectification for problematic Oracle tables.
+        
+        This fixes:
+        - Curved geometries (CURVEPOLYGON, COMPOUNDCURVE) that GeoPandas can't handle
+        - Invalid geometries (ring orientation, self-intersections, etc.)
+        
+        Uses SDO_GEOM.SDO_ARC_DENSIFY to convert curves to line segments
+        and SDO_UTIL.RECTIFY_GEOMETRY to fix geometry errors.
+        
+        Args:
+            query: SQL query string
+            table: Table name
+            geom_col: Geometry column name
+        
+        Returns:
+            Modified query with geometry fix applied
+        """
         if table not in OracleUtils.PROBLEMATIC_TABLES:
             return query
         
-        validation_clause = (
-            f"SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT({geom_col}, 0.5) = 'TRUE'\n  AND "
+        # Replace the geometry output with densified and rectified version
+        # Original: SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
+        # Fixed: Densify curves (arc_tolerance=0.5m), then rectify any remaining issues
+        
+        original_wkt = f'SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE'
+        fixed_wkt = (
+            f'SDO_UTIL.TO_WKTGEOMETRY('
+            f'SDO_UTIL.RECTIFY_GEOMETRY('
+            f'SDO_GEOM.SDO_ARC_DENSIFY({geom_col}, 0.005, \'arc_tolerance=0.5\'), '
+            f'0.005)) SHAPE'
         )
         
-        return query.replace(
-            'WHERE SDO_WITHIN_DISTANCE',
-            f'WHERE {validation_clause}SDO_WITHIN_DISTANCE'
-        )
+        return query.replace(original_wkt, fixed_wkt)
     
     @staticmethod
     def apply_coordinate_transform(query: str, geom_col: str, srid_t: int) -> str:
@@ -942,7 +963,7 @@ class DatasetProcessor:
             bind_vars = {'wkb_aoi': wkb_aoi, 'srid': int(srid)}
         
         cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
-        query = OracleUtils.apply_geometry_validation(query, table, geom_col)
+        query = OracleUtils.apply_geometry_fix(query, table, geom_col)
         
         # Execute query
         df_all = read_query(connection, cursor, query, bind_vars)

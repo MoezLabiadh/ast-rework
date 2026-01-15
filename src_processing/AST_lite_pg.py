@@ -1,4 +1,6 @@
 """
+ast_core.py
+
 Automatic Status Tool - LITE Version
 
 Purpose:     This script checks for overlaps between an AOI and datasets
@@ -181,7 +183,27 @@ def load_sql_queries() -> Dict[str, str]:
             WHERE rownum = 1
         """,
         
-        'oracle_overlay': """
+        # Oracle overlay query with two-stage filtering optimization:
+        # Uses SDO_RELATE for direct overlaps (radius=0)
+        # Uses SDO_WITHIN_DISTANCE for buffer/proximity checks (radius>0)
+        
+        # Query for radius = 0 (direct overlap only)
+        'oracle_overlay_zero_radius': """
+            SELECT {cols},
+                   'INTERSECT' AS RESULT,
+                   SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
+            FROM {tab}
+            WHERE SDO_FILTER({geom_col}, 
+                             SDO_GEOMETRY(:wkb_aoi, :srid),
+                             'querytype=WINDOW') = 'TRUE'
+              AND SDO_RELATE({geom_col}, 
+                             SDO_GEOMETRY(:wkb_aoi, :srid),
+                             'mask=ANYINTERACT') = 'TRUE'
+                {def_query}
+        """,
+        
+        # Query for radius > 0 (buffer/distance check)
+        'oracle_overlay_with_radius': """
             SELECT {cols},
                    CASE WHEN SDO_GEOM.SDO_DISTANCE({geom_col}, SDO_GEOMETRY(:wkb_aoi, :srid), 0.5) = 0 
                     THEN 'INTERSECT' 
@@ -189,7 +211,10 @@ def load_sql_queries() -> Dict[str, str]:
                       END AS RESULT,
                    SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
             FROM {tab}
-            WHERE SDO_WITHIN_DISTANCE ({geom_col}, 
+            WHERE SDO_FILTER({geom_col}, 
+                             SDO_GEOM.SDO_BUFFER(SDO_GEOMETRY(:wkb_aoi, :srid), {radius}, 0.5),
+                             'querytype=WINDOW') = 'TRUE'
+              AND SDO_WITHIN_DISTANCE ({geom_col}, 
                                        SDO_GEOMETRY(:wkb_aoi, :srid),'distance = {radius}') = 'TRUE'
                 {def_query}
         """,
@@ -601,22 +626,43 @@ class OracleUtils:
             return []
     
     @staticmethod
-    def apply_geometry_validation(query: str, table: str, geom_col: str) -> str:
-        """Apply geometry validation filter for problematic Oracle tables."""
+    def apply_geometry_fix(query: str, table: str, geom_col: str) -> str:
+        """Apply geometry densification and rectification for problematic Oracle tables.
+        
+        This fixes:
+        - Curved geometries (CURVEPOLYGON, COMPOUNDCURVE) that GeoPandas can't handle
+        - Invalid geometries (ring orientation, self-intersections, etc.)
+        
+        Uses SDO_GEOM.SDO_ARC_DENSIFY to convert curves to line segments
+        and SDO_UTIL.RECTIFY_GEOMETRY to fix geometry errors.
+        
+        Args:
+            query: SQL query string
+            table: Table name
+            geom_col: Geometry column name
+        
+        Returns:
+            Modified query with geometry fix applied
+        """
         if table not in OracleUtils.PROBLEMATIC_TABLES:
             return query
         
-        print('.......applying SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT filter')
-        print('.......Note: All invalid geometries will be excluded')
+        print('.......applying SDO_ARC_DENSIFY and RECTIFY_GEOMETRY fix')
+        print('.......Note: Curved geometries will be densified, invalid geometries will be rectified')
         
-        validation_clause = (
-            f"SDO_GEOM.VALIDATE_GEOMETRY_WITH_CONTEXT({geom_col}, 0.5) = 'TRUE'\n  AND "
+        # Replace the geometry output with densified and rectified version
+        # Original: SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
+        # Fixed: Densify curves (arc_tolerance=0.5m), then rectify any remaining issues
+        
+        original_wkt = f'SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE'
+        fixed_wkt = (
+            f'SDO_UTIL.TO_WKTGEOMETRY('
+            f'SDO_UTIL.RECTIFY_GEOMETRY('
+            f'SDO_GEOM.SDO_ARC_DENSIFY({geom_col}, 0.005, \'arc_tolerance=0.5\'), '
+            f'0.005)) SHAPE'
         )
         
-        return query.replace(
-            'WHERE SDO_WITHIN_DISTANCE',
-            f'WHERE {validation_clause}SDO_WITHIN_DISTANCE'
-        )
+        return query.replace(original_wkt, fixed_wkt)
     
     @staticmethod
     def apply_coordinate_transform(query: str, geom_col: str, srid_t: int) -> str:
@@ -1159,8 +1205,18 @@ class OverlayAnalyzer:
         if clean_def_query and not clean_def_query.upper().startswith('AND'):
             clean_def_query = 'AND ' + clean_def_query
         
+        # Choose appropriate query based on radius parameter
+        # radius=0: Use SDO_RELATE for direct overlaps (faster for exact intersection)
+        # radius>0: Use SDO_WITHIN_DISTANCE for buffer/proximity checks
+        if radius == 0:
+            query_template = self.sql['oracle_overlay_zero_radius']
+            print(f'.....using SDO_RELATE for direct overlap (radius=0)')
+        else:
+            query_template = self.sql['oracle_overlay_with_radius']
+            print(f'.....using SDO_WITHIN_DISTANCE for buffer check (radius={radius}m)')
+        
         # Build query
-        query = self.sql['oracle_overlay'].format(
+        query = query_template.format(
             cols=validated_cols,
             tab=table,
             radius=radius,
@@ -1178,8 +1234,8 @@ class OverlayAnalyzer:
         
         cursor.setinputsizes(wkb_aoi=oracledb.DB_TYPE_BLOB)
         
-        # Apply geometry validation
-        query = OracleUtils.apply_geometry_validation(query, table, geom_col)
+        # Apply geometry fix for problematic tables (densify curves, rectify invalid geometries)
+        query = OracleUtils.apply_geometry_fix(query, table, geom_col)
         
         # Execute query
         df_all = read_query(conn, cursor, query, bind_vars)
@@ -1355,9 +1411,9 @@ def main():
     region = 'west_coast'
     
     # TANTALIS parameters (if input_src == 'TANTALIS')
-    file_nbr = '5408057'
-    disp_id = 943829
-    prcl_id = 977043
+    file_nbr = '8016020'
+    disp_id = 944865
+    prcl_id = 978397
     
     oracle_conn = None
     postgis_conn = None
