@@ -375,7 +375,27 @@ def load_sql_queries() -> Dict[str, str]:
             WHERE rownum = 1
         """,
         
-        'oracle_overlay': """
+        # Oracle overlay query with two-stage filtering optimization:
+        # Uses SDO_RELATE for direct overlaps (radius=0)
+        # Uses SDO_WITHIN_DISTANCE for buffer/proximity checks (radius>0)
+        
+        # Query for radius = 0 (direct overlap only)
+        'oracle_overlay_zero_radius': """
+            SELECT {cols},
+                   'INTERSECT' AS RESULT,
+                   SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
+            FROM {tab}
+            WHERE SDO_FILTER({geom_col}, 
+                             SDO_GEOMETRY(:wkb_aoi, :srid),
+                             'querytype=WINDOW') = 'TRUE'
+              AND SDO_RELATE({geom_col}, 
+                             SDO_GEOMETRY(:wkb_aoi, :srid),
+                             'mask=ANYINTERACT') = 'TRUE'
+                {def_query}
+        """,
+        
+        # Query for radius > 0 (buffer/distance check)
+        'oracle_overlay_with_radius': """
             SELECT {cols},
                    CASE WHEN SDO_GEOM.SDO_DISTANCE({geom_col}, SDO_GEOMETRY(:wkb_aoi, :srid), 0.5) = 0 
                     THEN 'INTERSECT' 
@@ -383,23 +403,13 @@ def load_sql_queries() -> Dict[str, str]:
                       END AS RESULT,
                    SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
             FROM {tab}
-            WHERE SDO_WITHIN_DISTANCE ({geom_col}, 
+            WHERE SDO_FILTER({geom_col}, 
+                             SDO_GEOM.SDO_BUFFER(SDO_GEOMETRY(:wkb_aoi, :srid), {radius}, 0.5),
+                             'querytype=WINDOW') = 'TRUE'
+              AND SDO_WITHIN_DISTANCE ({geom_col}, 
                                        SDO_GEOMETRY(:wkb_aoi, :srid),'distance = {radius}') = 'TRUE'
                 {def_query}
         """,
-        
-        'postgis_overlay': """
-            SELECT {cols},
-                   CASE 
-                       WHEN ST_Intersects(geometry, ST_GeomFromWKB(%s, %s)) 
-                       THEN 'INTERSECT'
-                       ELSE 'Within ' || %s || ' m'
-                   END AS result,
-                   ST_AsText(geometry) AS shape
-            FROM {schema}.{table}
-            WHERE ST_DWithin(geometry, ST_GeomFromWKB(%s, %s), %s)
-            {def_query}
-        """
     }
 
 
