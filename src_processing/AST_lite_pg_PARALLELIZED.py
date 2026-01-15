@@ -397,19 +397,28 @@ def load_sql_queries() -> Dict[str, str]:
         # Query for radius > 0 (buffer/distance check)
         'oracle_overlay_with_radius': """
             SELECT {cols},
-                   CASE WHEN SDO_GEOM.SDO_DISTANCE({geom_col}, SDO_GEOMETRY(:wkb_aoi, :srid), 0.5) = 0 
-                    THEN 'INTERSECT' 
-                     ELSE 'Within ' || TO_CHAR({radius}) || ' m'
-                      END AS RESULT,
-                   SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
+                'Within {radius} m' AS RESULT,
+                SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
             FROM {tab}
-            WHERE SDO_FILTER({geom_col}, 
-                             SDO_GEOM.SDO_BUFFER(SDO_GEOMETRY(:wkb_aoi, :srid), {radius}, 0.5),
-                             'querytype=WINDOW') = 'TRUE'
-              AND SDO_WITHIN_DISTANCE ({geom_col}, 
-                                       SDO_GEOMETRY(:wkb_aoi, :srid),'distance = {radius}') = 'TRUE'
+            WHERE SDO_WITHIN_DISTANCE({geom_col}, 
+                                    SDO_GEOMETRY(:wkb_aoi, :srid),
+                                    'distance={radius}') = 'TRUE'
                 {def_query}
         """,
+        
+        # PostGIS queries
+        'postgis_overlay': """
+            SELECT {cols},
+                   CASE 
+                       WHEN ST_Intersects(geometry, ST_GeomFromWKB(%s, %s)) 
+                       THEN 'INTERSECT'
+                       ELSE 'Within ' || %s || ' m'
+                   END AS result,
+                   ST_AsText(geometry) AS shape
+            FROM {schema}.{table}
+            WHERE ST_DWithin(geometry, ST_GeomFromWKB(%s, %s), %s)
+            {def_query}
+        """
     }
 
 
