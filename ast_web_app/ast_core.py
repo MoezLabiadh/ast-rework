@@ -41,9 +41,11 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 import oracledb
 import psycopg2
 import pandas as pd
-import folium
 import geopandas as gpd
 from shapely import from_wkt, wkb
+
+# Import mapping module
+from ast_mapping import MapGenerator
 
 
 # ============================================================================
@@ -183,7 +185,10 @@ def load_sql_queries() -> Dict[str, str]:
             WHERE rownum = 1
         """,
         
-        # Oracle overlay
+        # Oracle overlay query with two-stage filtering optimization:
+        # Uses SDO_RELATE for direct overlaps (radius=0)
+        # Uses SDO_WITHIN_DISTANCE for buffer/proximity checks (radius>0)
+        
         # Query for radius = 0 (direct overlap only)
         'oracle_overlay_zero_radius': """
             SELECT {cols},
@@ -218,7 +223,15 @@ def load_sql_queries() -> Dict[str, str]:
         """,
         
         # PostGIS queries
+        # PostGIS overlay query optimization (similar to Oracle approach):
+        # Uses ST_Intersects for direct overlaps (radius=0) - faster, no distance calculation
+        # Uses ST_DWithin for buffer/proximity checks (radius>0) - required for distance filtering
+        
         # Query for radius = 0 (direct overlap only)
+        # ST_Intersects is faster than ST_DWithin with distance=0 because:
+        # 1. No distance calculation overhead
+        # 2. Can use spatial index more efficiently
+        # 3. Short-circuits on first intersection found
         'postgis_overlay_zero_radius': """
             SELECT {cols},
                    'INTERSECT' AS result,
@@ -230,6 +243,8 @@ def load_sql_queries() -> Dict[str, str]:
         """,
         
         # Query for radius > 0 (buffer/distance check)
+        # ST_DWithin uses the spatial index efficiently for distance queries
+        # The && operator provides a bounding box pre-filter for additional speed
         'postgis_overlay_with_radius': """
             SELECT {cols},
                    CASE 
@@ -871,78 +886,6 @@ class ColumnValidator:
 
 
 # ============================================================================
-# MAP GENERATION
-# ============================================================================
-
-class MapGenerator:
-    """Generates interactive HTML maps."""
-    
-    @staticmethod
-    def create_status_map(
-        gdf_aoi: gpd.GeoDataFrame,
-        gdf_intersect: gpd.GeoDataFrame,
-        label_col: str,
-        item_name: str,
-        workspace: str
-    ) -> None:
-        """
-        Generate interactive HTML map showing AOI and intersecting features.
-        """
-        # Create base map
-        m = folium.Map(tiles=None)
-
-        xmin, ymin, xmax, ymax = gdf_aoi.to_crs(4326)['geometry'].total_bounds
-        m.fit_bounds([[ymin, xmin], [ymax, xmax]])
-
-        # --- Base maps ---
-        # OpenStreetMap (DEFAULT)
-        folium.TileLayer(
-            tiles='OpenStreetMap',
-            name='OpenStreetMap',
-            control=True,
-            show=True   # 👈 default basemap
-        ).add_to(m)
-
-        # Google Satellite (optional)
-        folium.TileLayer(
-            tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-            attr='Google',
-            name='Google Satellite',
-            overlay=False,
-            control=True,
-            show=False  # 👈 not default
-        ).add_to(m)
-
-        # --- AOI layer ---
-        gdf_aoi.explore(
-            m=m,
-            tooltip=False,
-            style_kwds=dict(fill=False, color="red", weight=3),
-            name="AOI"
-        )
-
-        # --- Intersection layer ---
-        gdf_intersect.explore(
-            m=m,
-            column=label_col,
-            tooltip=label_col,
-            popup=True,
-            cmap="Dark2",
-            style_kwds=dict(color="gray"),
-            name=item_name
-        )
-
-        folium.LayerControl(collapsed=False).add_to(m)
-
-        # Save map
-        maps_dir = os.path.join(workspace, 'maps')
-        os.makedirs(maps_dir, exist_ok=True)
-        out_html = os.path.join(maps_dir, f'{item_name}.html')
-        m.save(out_html)
-
-
-
-# ============================================================================
 # EXCEL REPORT GENERATION
 # ============================================================================
 
@@ -1089,22 +1032,34 @@ class OverlayAnalyzer:
         self,
         oracle_conn: OracleConnection,
         postgis_conn: PostGISConnection,
-        sql_queries: Dict[str, str]
+        sql_queries: Dict[str, str],
+        gdf_aoi: gpd.GeoDataFrame,
+        df_stat: pd.DataFrame,
+        workspace: str
     ):
         self.oracle_conn = oracle_conn
         self.postgis_conn = postgis_conn
         self.sql = sql_queries
+        self.gdf_aoi = gdf_aoi
+        self.df_stat = df_stat
+        self.workspace = workspace
         self.results = {}
         self.failed_datasets = []
+        
+        # Initialize the enhanced MapGenerator
+        print('\nInitializing Map Generator')
+        self.map_generator = MapGenerator(
+            gdf_aoi=gdf_aoi,
+            workspace=workspace,
+            df_stat=df_stat
+        )
+        self.map_generator.initialize_all_layers_map()
     
     def analyze_dataset(
         self,
         item_index: int,
-        df_stat: pd.DataFrame,
         wkb_aoi: bytes,
         srid: int,
-        gdf_aoi: gpd.GeoDataFrame,
-        workspace: str,
         region: str
     ) -> None:
         """
@@ -1112,25 +1067,29 @@ class OverlayAnalyzer:
         
         Args:
             item_index: Row index in config DataFrame
-            df_stat: Configuration DataFrame
             wkb_aoi: WKB representation of AOI
             srid: SRID of AOI
-            gdf_aoi: AOI GeoDataFrame
-            workspace: Output workspace directory
             region: Region name for PostGIS schema
         """
-        item = df_stat.loc[item_index, 'Featureclass_Name(valid characters only)']
+        item = self.df_stat.loc[item_index, 'Featureclass_Name(valid characters only)']
+        
+        # Get category, handling NaN values
+        category = ''
+        if 'Category' in self.df_stat.columns:
+            cat_value = self.df_stat.loc[item_index, 'Category']
+            if pd.notna(cat_value):
+                category = str(cat_value)
         
         try:
             # Get configuration
             print('.....getting table and column names')
-            table, cols, col_lbl = DatasetConfig.get_table_columns(item_index, df_stat)
+            table, cols, col_lbl = DatasetConfig.get_table_columns(item_index, self.df_stat)
             
             print('.....getting definition query (if any)')
-            def_query = DatasetConfig.get_definition_query(item_index, df_stat, for_postgis=False)
+            def_query = DatasetConfig.get_definition_query(item_index, self.df_stat, for_postgis=False)
             
             print('.....getting buffer distance (if any)')
-            radius = DatasetConfig.get_buffer_distance(item_index, df_stat)
+            radius = DatasetConfig.get_buffer_distance(item_index, self.df_stat)
             
             # Determine if Oracle or PostGIS
             is_oracle = table.startswith('WHSE') or table.startswith('REG')
@@ -1170,11 +1129,15 @@ class OverlayAnalyzer:
             
             # Generate map if overlaps found
             if ov_nbr > 0:
-                self._generate_map(df_result, gdf_aoi, cols, col_lbl, item, workspace, is_oracle)
+                self._generate_map(
+                    df_result, cols, col_lbl, item, 
+                    category, table, is_oracle
+                )
         
         except Exception as e:
             print(f'.......ERROR processing dataset {item}: {e}')
             self.failed_datasets.append({'item': item, 'reason': str(e)})
+            self.results[item] = pd.DataFrame([])
             self.results[item] = pd.DataFrame([])
     
     def _analyze_oracle_dataset(
@@ -1362,14 +1325,14 @@ class OverlayAnalyzer:
     def _generate_map(
         self,
         df_result: pd.DataFrame,
-        gdf_aoi: gpd.GeoDataFrame,
         cols: str,
         col_lbl: str,
         item: str,
-        workspace: str,
+        category: str,
+        data_source: str,
         is_oracle: bool
     ) -> None:
-        """Generate map for dataset with overlaps."""
+        """Generate map for dataset with overlaps using the enhanced MapGenerator."""
         print('.....generating a map.')
         
         # Check if DataFrame has geometry before converting
@@ -1420,6 +1383,18 @@ class OverlayAnalyzer:
             if gdf_intersect[col].dtype == 'datetime64[ns]':
                 gdf_intersect[col] = gdf_intersect[col].astype(str)
         
-        # Simplify and create map
+        # Simplify geometries for web display
         gdf_intersect_s = GeometryProcessor.simplify_geometries(gdf_intersect, tolerance=10)
-        MapGenerator.create_status_map(gdf_aoi, gdf_intersect_s, col_lbl_use, item, workspace)
+        
+        # Create individual map and add to all-layers map
+        self.map_generator.create_individual_map(
+            gdf_intersect=gdf_intersect_s,
+            label_col=col_lbl_use,
+            item_name=item,
+            category=category,
+            data_source=data_source
+        )
+    
+    def finalize_maps(self) -> None:
+        """Save the all-layers combined map. Call this after all datasets are processed."""
+        self.map_generator.save_all_layers_map()

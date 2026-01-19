@@ -225,7 +225,10 @@ class ASTProcessor:
         analyzer = OverlayAnalyzer(
             self.oracle_conn,
             self.postgis_conn,
-            sql
+            sql,
+            gdf_aoi,
+            df_stat,
+            str(workspace)
         )
         
         item_count = df_stat.shape[0]
@@ -247,13 +250,10 @@ class ASTProcessor:
             
             try:
                 analyzer.analyze_dataset(
-                    index,
-                    df_stat,
-                    wkb_aoi,
-                    srid,
-                    gdf_aoi,
-                    str(workspace),
-                    self.config['region']
+                        index,
+                        wkb_aoi,
+                        srid,
+                        self.config['region']
                 )
             except Exception as e:
                 print(f"Failed to process {item}: {e}")
