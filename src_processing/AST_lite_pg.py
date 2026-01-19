@@ -26,7 +26,7 @@ Arguments:   - Output location (workspace)
 Author: Moez Labiadh - GeoBC
 
 Created: 2025-12-23
-Updated: 2025-01-08
+Updated: 2025-01-19
 """
 
 import warnings
@@ -183,10 +183,7 @@ def load_sql_queries() -> Dict[str, str]:
             WHERE rownum = 1
         """,
         
-        # Oracle overlay query with two-stage filtering optimization:
-        # Uses SDO_RELATE for direct overlaps (radius=0)
-        # Uses SDO_WITHIN_DISTANCE for buffer/proximity checks (radius>0)
-        
+        # Oracle overlay
         # Query for radius = 0 (direct overlap only)
         'oracle_overlay_zero_radius': """
             SELECT {cols},
@@ -205,7 +202,13 @@ def load_sql_queries() -> Dict[str, str]:
         # Query for radius > 0 (buffer/distance check)
         'oracle_overlay_with_radius': """
             SELECT {cols},
-                'Within {radius} m' AS RESULT,
+                CASE 
+                    WHEN SDO_RELATE({geom_col}, 
+                                    SDO_GEOMETRY(:wkb_aoi, :srid),
+                                    'mask=ANYINTERACT') = 'TRUE'
+                    THEN 'INTERSECT'
+                    ELSE 'Within {radius} m'
+                END AS RESULT,
                 SDO_UTIL.TO_WKTGEOMETRY({geom_col}) SHAPE
             FROM {tab}
             WHERE SDO_WITHIN_DISTANCE({geom_col}, 
@@ -215,16 +218,29 @@ def load_sql_queries() -> Dict[str, str]:
         """,
         
         # PostGIS queries
-        'postgis_overlay': """
+        # Query for radius = 0 (direct overlap only)
+        'postgis_overlay_zero_radius': """
+            SELECT {cols},
+                   'INTERSECT' AS result,
+                   ST_AsText(geometry) AS shape
+            FROM {schema}.{table}
+            WHERE geometry && ST_GeomFromWKB(%s, %s)
+              AND ST_Intersects(geometry, ST_GeomFromWKB(%s, %s))
+            {def_query}
+        """,
+        
+        # Query for radius > 0 (buffer/distance check)
+        'postgis_overlay_with_radius': """
             SELECT {cols},
                    CASE 
                        WHEN ST_Intersects(geometry, ST_GeomFromWKB(%s, %s)) 
                        THEN 'INTERSECT'
-                       ELSE 'Within ' || %s || ' m'
+                       ELSE 'Within {radius} m'
                    END AS result,
                    ST_AsText(geometry) AS shape
             FROM {schema}.{table}
-            WHERE ST_DWithin(geometry, ST_GeomFromWKB(%s, %s), %s)
+            WHERE geometry && ST_Expand(ST_GeomFromWKB(%s, %s), {radius})
+              AND ST_DWithin(geometry, ST_GeomFromWKB(%s, %s), {radius})
             {def_query}
         """
     }
@@ -1286,24 +1302,46 @@ class OverlayAnalyzer:
         if pg_def_query and pg_def_query.strip():
             pg_def_query = 'AND ' + pg_def_query
         
+        # Choose appropriate query based on radius parameter
+        # radius=0: Use ST_Intersects for direct overlaps (faster, no distance calculation)
+        # radius>0: Use ST_DWithin for buffer/proximity checks
+        if radius == 0:
+            query_template = self.sql['postgis_overlay_zero_radius']
+            print(f'.....using ST_Intersects for direct overlap (radius=0)')
+        else:
+            query_template = self.sql['postgis_overlay_with_radius']
+            print(f'.....using ST_DWithin for buffer check (radius={radius}m)')
+        
         # Build query
-        query = self.sql['postgis_overlay'].format(
+        query = query_template.format(
             cols=validated_cols,
             schema=schema,
             table=table_name,
+            radius=radius,
             def_query=pg_def_query
         )
         
-        # Execute query
+        # Execute query with appropriate parameters based on query type
         try:
-            cursor.execute(query, (
-                psycopg2.Binary(wkb_aoi),
-                int(srid),
-                str(radius),
-                psycopg2.Binary(wkb_aoi),
-                int(srid),
-                float(radius)
-            ))
+            if radius == 0:
+                # Zero radius query: needs 4 parameters (2 for && bbox filter, 2 for ST_Intersects)
+                cursor.execute(query, (
+                    psycopg2.Binary(wkb_aoi),
+                    int(srid),
+                    psycopg2.Binary(wkb_aoi),
+                    int(srid)
+                ))
+            else:
+                # Non-zero radius query: needs 6 parameters 
+                # (2 for CASE ST_Intersects, 2 for && bbox filter, 2 for ST_DWithin)
+                cursor.execute(query, (
+                    psycopg2.Binary(wkb_aoi),
+                    int(srid),
+                    psycopg2.Binary(wkb_aoi),
+                    int(srid),
+                    psycopg2.Binary(wkb_aoi),
+                    int(srid)
+                ))
             
             # Fetch results
             names = [desc[0] for desc in cursor.description]
