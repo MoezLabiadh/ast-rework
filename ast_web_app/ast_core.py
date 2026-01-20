@@ -896,7 +896,8 @@ class ExcelReportWriter:
     def write_report(
         results: Dict[str, pd.DataFrame],
         df_stat: pd.DataFrame,
-        workspace: str
+        workspace: str,
+        create_maps: bool = True
     ) -> None:
         """
         Write results to Excel spreadsheet.
@@ -905,6 +906,7 @@ class ExcelReportWriter:
             results: Dictionary of dataset results
             df_stat: Configuration DataFrame
             workspace: Output workspace directory
+            create_maps: Whether maps were generated
         """
         df_res = df_stat[['Category', 'Featureclass_Name(valid characters only)']].copy()
         df_res.rename(columns={'Featureclass_Name(valid characters only)': 'item'}, inplace=True)
@@ -938,12 +940,17 @@ class ExcelReportWriter:
                     
                     # Add row for each conflict
                     for conflict in result_df['Result'].to_list():
-                        map_path = os.path.join(workspace, 'maps', f'{item_name}.html')
+                        if create_maps:
+                            map_path = os.path.join(workspace, 'maps', f'{item_name}.html')
+                            map_value = f'=HYPERLINK("{map_path}", "View Map")'
+                        else:
+                            map_value = 'Map not generated'
+                        
                         expanded_rows.append({
                             'Category': row['Category'],
                             'item': row['item'],
                             'List of conflicts': str(conflict),
-                            'Map': f'=HYPERLINK("{map_path}", "View Map")'
+                            'Map': map_value
                         })
                     break
             
@@ -986,6 +993,12 @@ class ExcelReportWriter:
                 'text_wrap': True
             })
             
+            # Format for "Map not generated" text
+            map_not_generated_format = workbook.add_format({
+                'font_color': '#808080',  # Gray
+                'italic': True
+            })
+            
             worksheet.set_column(0, 0, 30)
             worksheet.set_column(1, 1, 60)
             worksheet.set_column(2, 2, 80, txt_format)
@@ -999,6 +1012,17 @@ class ExcelReportWriter:
                     'criteria': 'equal to',
                     'value': '"View Map"',
                     'format': lnk_format
+                }
+            )
+            
+            # Conditional formatting for "Map not generated"
+            worksheet.conditional_format(
+                f'D2:D{df_res.shape[0] + 1}',
+                {
+                    'type': 'cell',
+                    'criteria': 'equal to',
+                    'value': '"Map not generated"',
+                    'format': map_not_generated_format
                 }
             )
             
@@ -1035,7 +1059,8 @@ class OverlayAnalyzer:
         sql_queries: Dict[str, str],
         gdf_aoi: gpd.GeoDataFrame,
         df_stat: pd.DataFrame,
-        workspace: str
+        workspace: str,
+        create_maps: bool = True
     ):
         self.oracle_conn = oracle_conn
         self.postgis_conn = postgis_conn
@@ -1045,15 +1070,20 @@ class OverlayAnalyzer:
         self.workspace = workspace
         self.results = {}
         self.failed_datasets = []
+        self.create_maps = create_maps
         
-        # Initialize the enhanced MapGenerator
-        print('\nInitializing Map Generator')
-        self.map_generator = MapGenerator(
-            gdf_aoi=gdf_aoi,
-            workspace=workspace,
-            df_stat=df_stat
-        )
-        self.map_generator.initialize_all_layers_map()
+        # Initialize the enhanced MapGenerator only if maps are enabled
+        if self.create_maps:
+            print('\nInitializing Map Generator')
+            self.map_generator = MapGenerator(
+                gdf_aoi=gdf_aoi,
+                workspace=workspace,
+                df_stat=df_stat
+            )
+            self.map_generator.initialize_all_layers_map()
+        else:
+            print('\nMap generation disabled - skipping Map Generator initialization')
+            self.map_generator = None
     
     def analyze_dataset(
         self,
@@ -1333,6 +1363,11 @@ class OverlayAnalyzer:
         is_oracle: bool
     ) -> None:
         """Generate map for dataset with overlaps using the enhanced MapGenerator."""
+        # Skip map generation if disabled
+        if not self.create_maps:
+            print('.....map generation disabled - skipping map creation.')
+            return
+        
         print('.....generating a map.')
         
         # Check if DataFrame has geometry before converting
@@ -1397,4 +1432,7 @@ class OverlayAnalyzer:
     
     def finalize_maps(self) -> None:
         """Save the all-layers combined map. Call this after all datasets are processed."""
-        self.map_generator.save_all_layers_map()
+        if self.create_maps and self.map_generator:
+            self.map_generator.save_all_layers_map()
+        else:
+            print('\nMap generation disabled - skipping all-layers map creation')

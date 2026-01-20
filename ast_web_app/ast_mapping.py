@@ -915,7 +915,6 @@ class MapGenerator:
         if os.path.exists(out_path):
             try:
                 os.remove(out_path)
-                print(f'....Removed existing all-layers map: {out_path}')
             except Exception as e:
                 print(f'....Warning: Could not remove existing file: {e}')
         

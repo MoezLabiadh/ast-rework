@@ -10,7 +10,7 @@ Updated to return AOI geometry data for web display.
 Author: Moez Labiadh - GeoBC
 
 Created: 2026-01-06
-Updated: 2026-01-13
+Updated: 2026-01-20
 """
 
 import os
@@ -53,6 +53,7 @@ class ASTProcessor:
                 - postgis: PostGIS connection details
                 - tantalis: TANTALIS parameters (if applicable)
                 - aoi_file: AOI file path (if applicable)
+                - create_maps: Whether to generate maps (default: True)
             progress_callback: Function to call with progress updates
                                signature: callback(progress_percent, message)
             cancellation_check: Function that returns True if analysis should be cancelled
@@ -65,6 +66,7 @@ class ASTProcessor:
         self.results = {}
         self.failed_datasets = []
         self.gdf_aoi = None  # Store AOI for web display
+        self.create_maps = config.get('create_maps', True)  # Get from config, default True
     
     def _update_progress(self, progress: int, message: str):
         """Update progress if callback is provided."""
@@ -228,7 +230,8 @@ class ASTProcessor:
             sql,
             gdf_aoi,
             df_stat,
-            str(workspace)
+            str(workspace),
+            create_maps=self.create_maps
         )
         
         item_count = df_stat.shape[0]
@@ -275,7 +278,8 @@ class ASTProcessor:
         ExcelReportWriter.write_report(
             self.results,
             df_stat,
-            str(workspace)
+            str(workspace),
+            create_maps=self.create_maps
         )
         
         return str(workspace / 'AST_lite_TAB3.xlsx')
@@ -381,7 +385,8 @@ class ASTProcessor:
             'failed_details': self.failed_datasets,
             'output_file': output_file,
             'workspace': str(workspace),
-            'gdf_aoi': self.gdf_aoi  # AOI geometry for web map
+            'gdf_aoi': self.gdf_aoi,  # AOI geometry for web map
+            'create_maps': self.create_maps  # Include map generation status
         }
     
     def _cleanup(self):

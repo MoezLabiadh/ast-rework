@@ -7,7 +7,8 @@ A Flask/Dash web interface for running the Automatic Status Tool.
 
 Author: Moez Labiadh
 
-Created: 2026-01-13
+Created: 2026-01-06
+Updated: 2026-01-20
 """
 
 import os, shutil, threading, uuid, pickle, re
@@ -120,6 +121,20 @@ app.layout = html.Div([
                                 'justifyContent':'center'}, multiple=False),
                             dcc.Loading(id="loading-upload", children=html.Div(id='upload-status'))
                         ], style={'display':'none'})
+                    ])
+                ], className="mb-4"),
+                
+                # Other Configurations
+                dbc.Card([
+                    dbc.CardHeader([html.I(className="fas fa-cog me-2"), "Other Configurations"]),
+                    dbc.CardBody([
+                        dbc.Checkbox(
+                            id="generate-maps",
+                            label="Generate Maps",
+                            value=True,
+                            className="mb-2"
+                        ),
+                        html.Small("Uncheck to skip map generation and speed up analysis", className="text-muted")
                     ])
                 ], className="mb-4"),
                 
@@ -515,11 +530,12 @@ def handle_upload(contents, filename, workspace):
      State("uploaded-files", "data"), State("region", "value"), State("workspace", "value"),
      State("bcgw-username", "value"), State("bcgw-password", "value"), State("bcgw-hostname", "value"),
      State("postgis-host", "value"), State("postgis-database", "value"),
-     State("postgis-username", "value"), State("postgis-password", "value")],
+     State("postgis-username", "value"), State("postgis-password", "value"),
+     State("generate-maps", "value")],
     prevent_initial_call=True)
 def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id, uploaded_files,
                    region, workspace, bcgw_user, bcgw_pwd, bcgw_host, 
-                   pg_host, pg_db, pg_user, pg_pwd):
+                   pg_host, pg_db, pg_user, pg_pwd, generate_maps):
     if not n_clicks:
         return None, False, True, True, [
             dbc.Progress(id="progress-bar", value=0, striped=True, animated=True, className="mb-3"),
@@ -551,7 +567,8 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id, uplo
         'input_source': input_source, 'region': region, 'workspace': workspace,
         'workspace_xls': r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets',
         'bcgw': {'username': bcgw_user, 'password': bcgw_pwd, 'hostname': bcgw_host},
-        'postgis': {'host': pg_host, 'database': pg_db, 'user': pg_user, 'password': pg_pwd}}
+        'postgis': {'host': pg_host, 'database': pg_db, 'user': pg_user, 'password': pg_pwd},
+        'create_maps': generate_maps if generate_maps is not None else True}
     
     if input_source == "TANTALIS":
         config['tantalis'] = {'file_number': file_number, 'disposition_id': int(disp_id), 
@@ -904,11 +921,22 @@ def generate_html(job_id, res, det, job_data=None):
     
     # Build map tabs for all generated maps
     map_html = ""
+    # Check if map generation was disabled
+    create_maps = res.get('create_maps', True)  # Default to True for backwards compatibility
+    
     # Look for the combined all-layers map
     all_layers_map = maps_dir / '00_all_layers.html'
     
-    if all_layers_map.exists():
-        # Display only the combined all-layers map
+    if not create_maps:
+        # Maps were disabled during analysis
+        map_html = '''<div class="alert alert-info">
+            <i class="fas fa-info-circle me-2"></i>
+            <strong>Map generation was disabled for this analysis.</strong><br>
+            Maps were not created. 
+            If you need maps, please re-run the analysis with the "Generate Maps" option checked.
+        </div>'''
+    elif all_layers_map.exists():
+        # Display only the combined all-layers map (no tabs needed)
         relative_path = f'/map/{job_id}/00_all_layers.html'
         map_html = f'''
             <iframe src="{relative_path}" 
@@ -963,7 +991,7 @@ def generate_html(job_id, res, det, job_data=None):
         <div class="card mb-4">
             <div class="card-header bg-info text-white">
                 <h4 class="mb-0"><i class="fas fa-globe me-2"></i>Interactive Map</h4>
-                <small>Use layer controls to toggle datasets on/off. Click on features to see details.Check the output folder for individual maps</small>
+                <small>Click on features to see details. Use layer controls to toggle datasets on/off.</small>
             </div>
             <div class="card-body p-0">
                 <div class="map-container">
