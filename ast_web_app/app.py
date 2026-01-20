@@ -904,85 +904,20 @@ def generate_html(job_id, res, det, job_data=None):
     
     # Build map tabs for all generated maps
     map_html = ""
-    map_tabs = ""
-    map_content = ""
+    # Look for the combined all-layers map
+    all_layers_map = maps_dir / '00_all_layers.html'
     
-    if maps_dir.exists():
-        map_files = sorted(list(maps_dir.glob('*.html')))
-        if map_files:
-            # Create tabs for each map
-            for idx, map_file in enumerate(map_files):
-                dataset_name = map_file.stem  # filename without extension
-                tab_id = f"map-{idx}"
-                active_class = "active" if idx == 0 else ""
-                
-                # Create tab button
-                map_tabs += f'''
-                    <button class="nav-link {active_class}" id="{tab_id}-tab" data-bs-toggle="tab" 
-                            data-bs-target="#{tab_id}" type="button" role="tab">
-                        {dataset_name}
-                    </button>
-                '''
-                
-                # Create tab content with lazy loading
-                relative_path = f'/map/{job_id}/{map_file.name}'
-                # Only load the first map immediately, lazy load others
-                if idx == 0:
-                    map_content += f'''
-                    <div class="tab-pane fade show active" id="{tab_id}" role="tabpanel">
-                        <iframe id="{tab_id}-iframe" src="{relative_path}" 
-                                style="width: 100%; height: 600px; border: none;" 
-                                allowfullscreen>
-                        </iframe>
-                    </div>
-                    '''
-                else:
-                    # Use data-src for lazy loading
-                    map_content += f'''
-                    <div class="tab-pane fade" id="{tab_id}" role="tabpanel">
-                        <iframe id="{tab_id}-iframe" data-src="{relative_path}" 
-                                style="width: 100%; height: 600px; border: none;" 
-                                allowfullscreen>
-                        </iframe>
-                    </div>
-                    '''
-            
-            map_html = f'''
-                <nav>
-                    <div class="nav nav-tabs" id="nav-tab" role="tablist">
-                        {map_tabs}
-                    </div>
-                </nav>
-                <div class="tab-content" id="nav-tabContent">
-                    {map_content}
-                </div>
-                <script>
-                // Lazy load iframes when tabs are shown
-                document.addEventListener('DOMContentLoaded', function() {{
-                    var triggerTabList = [].slice.call(document.querySelectorAll('#nav-tab button'));
-                    triggerTabList.forEach(function(triggerEl) {{
-                        triggerEl.addEventListener('shown.bs.tab', function(event) {{
-                            // Get the target pane
-                            var target = event.target.getAttribute('data-bs-target');
-                            var pane = document.querySelector(target);
-                            
-                            if (pane) {{
-                                var iframe = pane.querySelector('iframe');
-                                
-                                // If iframe has data-src but not src, load it now
-                                if (iframe && iframe.hasAttribute('data-src') && !iframe.hasAttribute('src')) {{
-                                    iframe.setAttribute('src', iframe.getAttribute('data-src'));
-                                    iframe.removeAttribute('data-src');
-                                }}
-                            }}
-                        }});
-                    }});
-                }});
-                </script>
-            '''
-    
-    if not map_html:
-        map_html = '<div class="alert alert-warning"><i class="fas fa-exclamation-triangle me-2"></i>No map available. Maps are generated for datasets with conflicts.</div>'
+    if all_layers_map.exists():
+        # Display only the combined all-layers map
+        relative_path = f'/map/{job_id}/00_all_layers.html'
+        map_html = f'''
+            <iframe src="{relative_path}" 
+                    style="width: 100%; height: 800px; border: none;" 
+                    allowfullscreen>
+            </iframe>
+        '''
+    else:
+        map_html = '<div class="alert alert-warning"><i class="fas fa-exclamation-triangle me-2"></i>No map available. The combined layers map (00_all_layers.html) was not found.</div>'
     
     # Build failed datasets section (removed - not needed for display)
     failed_section = ""
@@ -1028,7 +963,7 @@ def generate_html(job_id, res, det, job_data=None):
         <div class="card mb-4">
             <div class="card-header bg-info text-white">
                 <h4 class="mb-0"><i class="fas fa-globe me-2"></i>Interactive Map</h4>
-                <small>Click on features to see details. Use layer controls to toggle datasets on/off.</small>
+                <small>Use layer controls to toggle datasets on/off. Click on features to see details.Check the output folder for individual maps</small>
             </div>
             <div class="card-body p-0">
                 <div class="map-container">

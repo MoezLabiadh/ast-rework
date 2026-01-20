@@ -4,6 +4,7 @@ ast_mapping.py
 This module provides interactive HTML map generation for the AST Lite tool.
 
 Author: Moez Labiadh - GeoBC
+
 Created: 2025-01-19
 """
 
@@ -422,61 +423,78 @@ class MapGenerator:
             map_path: Path to the saved HTML map file
             title: Title text to display in header
         """
+        import time
+        
         map_path = Path(map_path)
         if not map_path.exists():
             print(f"Warning: Map file not found for branding: {map_path}")
             return
         
-        # Read original HTML
-        with map_path.open('r', encoding='utf-8') as f:
-            html = f.read()
+        # Small delay to ensure file is fully written and closed
+        time.sleep(0.1)
         
-        # Add BC Sans font
-        bc_sans_link = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/bcgov/bc-sans@main/css/BCSans.css" />'
-        html = html.replace('<head>', f'<head>\n    {bc_sans_link}')
-        
-        # Prepare logo (base64 encoded if provided)
-        logo_html = ""
-        if self.logo_path and os.path.exists(self.logo_path):
-            try:
-                with open(self.logo_path, "rb") as img_file:
-                    logo_b64 = base64.b64encode(img_file.read()).decode("utf-8")
-                logo_html = f'<img src="data:image/png;base64,{logo_b64}" alt="Logo" style="height:50px;margin-right:15px;">'
-            except Exception as e:
-                print(f"Warning: Could not load logo: {e}")
-        
-        # Define header HTML
-        header_html = f"""
-        <div style="background:#003366; color:white; padding:10px 20px;
-                    display:flex; align-items:center; font-family:'BC Sans', sans-serif;">
-            {logo_html}
-            <div style="display:flex; flex-direction:column;">
-                <div style="font-size:16px; font-weight:bold; color:white;">
-                    Water, Land, and Resource Stewardship
-                </div>
-                <div style="font-size:20px; font-weight:bold; color:#e3a82b;">
-                    {title}
+        try:
+            # Read original HTML
+            with map_path.open('r', encoding='utf-8') as f:
+                html = f.read()
+            
+            # Add BC Sans font
+            bc_sans_link = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/bcgov/bc-sans@main/css/BCSans.css" />'
+            html = html.replace('<head>', f'<head>\n    {bc_sans_link}')
+            
+            # Prepare logo (base64 encoded if provided)
+            logo_html = ""
+            if self.logo_path and os.path.exists(self.logo_path):
+                try:
+                    with open(self.logo_path, "rb") as img_file:
+                        logo_b64 = base64.b64encode(img_file.read()).decode("utf-8")
+                    logo_html = f'<img src="data:image/png;base64,{logo_b64}" alt="Logo" style="height:50px;margin-right:15px;">'
+                except Exception as e:
+                    print(f"Warning: Could not load logo: {e}")
+            
+            # Define header HTML
+            header_html = f"""
+            <div style="background:#003366; color:white; padding:10px 20px;
+                        display:flex; align-items:center; font-family:'BC Sans', sans-serif;">
+                {logo_html}
+                <div style="display:flex; flex-direction:column;">
+                    <div style="font-size:16px; font-weight:bold; color:white;">
+                        Water, Land, and Resource Stewardship
+                    </div>
+                    <div style="font-size:20px; font-weight:bold; color:#e3a82b;">
+                        {title}
+                    </div>
                 </div>
             </div>
-        </div>
-        """
-        
-        # Define footer HTML
-        footer_html = """
-        <div style="background:#003366; color:white; padding:10px; text-align:center;
-                    font-size:12px; font-family:'BC Sans', sans-serif; position:fixed;
-                    bottom:0; width:100%; z-index:9999;">
-            © 2025 Government of British Columbia | INTERNAL GOVERNMENT USE ONLY
-        </div>
-        </body>"""
-        
-        # Inject into HTML
-        html = html.replace('<body>', f'<body>\n{header_html}')
-        html = html.replace('</body>', footer_html)
-        
-        # Write modified HTML
-        with map_path.open('w', encoding='utf-8') as f:
-            f.write(html)
+            """
+            
+            # Define footer HTML
+            footer_html = """
+            <div style="background:#003366; color:white; padding:10px; text-align:center;
+                        font-size:12px; font-family:'BC Sans', sans-serif; position:fixed;
+                        bottom:0; width:100%; z-index:9999;">
+                © 2025 Government of British Columbia | INTERNAL GOVERNMENT USE ONLY
+            </div>
+            </body>"""
+            
+            # Inject into HTML
+            html = html.replace('<body>', f'<body>\n{header_html}')
+            html = html.replace('</body>', footer_html)
+            
+            # Write modified HTML - ensure file is fully closed before returning
+            with map_path.open('w', encoding='utf-8') as f:
+                f.write(html)
+            
+            # Small delay to ensure write is complete
+            time.sleep(0.1)
+            
+        except PermissionError as e:
+            print(f"Permission error accessing {map_path}: {e}")
+            print("The file may be open in another program. Please close it and try again.")
+            raise
+        except Exception as e:
+            print(f"Error injecting branding into {map_path}: {e}")
+            raise
     
     def _get_color_for_values(
         self,
@@ -892,10 +910,29 @@ class MapGenerator:
         
         # Save map
         out_path = os.path.join(self.maps_dir, '00_all_layers.html')
-        self.map_all.save(out_path)
+        
+        # Try to remove existing file first to avoid Windows file locking issues
+        if os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+                print(f'....Removed existing all-layers map: {out_path}')
+            except Exception as e:
+                print(f'....Warning: Could not remove existing file: {e}')
+        
+        # Save the map
+        try:
+            self.map_all.save(out_path)
+            print(f'....All-layers map saved to: {out_path}')
+        except Exception as e:
+            print(f'....Error saving all-layers map: {e}')
+            raise
         
         # Inject branding
-        self._inject_branding(out_path, title='Overview Map - All Overlaps')
+        try:
+            self._inject_branding(out_path, title='Overview Map - All Overlaps')
+            print('....Branding injected successfully')
+        except Exception as e:
+            print(f'....Warning: Could not inject branding: {e}')
 
 # ============================================================================
 # CONVENIENCE FUNCTION FOR SIMPLE USE

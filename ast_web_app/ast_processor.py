@@ -265,6 +265,10 @@ class ASTProcessor:
         # Store results
         self.results = analyzer.results
         self.failed_datasets = analyzer.failed_datasets
+        
+        # Generate the all-layers combined map
+        self._update_progress(88, "Generating combined map with all layers...")
+        analyzer.finalize_maps()
     
     def _write_results(self, df_stat, workspace) -> str:
         """Write results to Excel and return file path."""
