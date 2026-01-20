@@ -1,7 +1,7 @@
 """
 ast_core.py
 
-Automatic Status Tool - LITE Version
+AST-NEXT: Automatic Status Tool - Next Generation!
 
 Purpose:     This script checks for overlaps between an AOI and datasets
              specified in the AST datasets spreadsheets (common and region specific). 
@@ -974,7 +974,7 @@ class ExcelReportWriter:
         df_res['List of conflicts'] = df_res['List of conflicts'].replace('', 'No overlaps')
         
         # Write to Excel
-        filename = os.path.join(workspace, 'AST_lite_TAB3.xlsx')
+        filename = os.path.join(workspace, 'ast_next_TAB3.xlsx')
         sheetname = 'Conflicts & Constraints'
         
         with pd.ExcelWriter(filename, engine='xlsxwriter') as writer:

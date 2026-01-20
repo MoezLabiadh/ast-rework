@@ -1,7 +1,7 @@
 """
 ast_mapping.py
 
-This module provides interactive HTML map generation for the AST Lite tool.
+This module provides interactive HTML map generation for the AST-NEXT tool.
 
 Author: Moez Labiadh - GeoBC
 
@@ -73,7 +73,7 @@ MAP_CSS = """
 
 class MapGenerator:
     """
-    Enhanced map generator for AST Lite.
+    Map generator for AST-NEXT.
     
     Creates interactive HTML maps with:
     - Multiple basemap options (GeoBC, satellite)

@@ -1,7 +1,7 @@
 """
 ast_processor.py
 
-AST Processor Module
+AST-NEXT Processor Module
 
 Wraps the original AST script logic for use with the web GUI.
 Provides progress callbacks and result aggregation.
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Dict, Callable, Optional
 import pandas as pd
 
-# Import all the classes from your original script
+# Import all the classes from your the script
 from ast_core import (
     OracleConnection,
     PostGISConnection,
@@ -282,7 +282,7 @@ class ASTProcessor:
             create_maps=self.create_maps
         )
         
-        return str(workspace / 'AST_lite_TAB3.xlsx')
+        return str(workspace / 'ast_next_TAB3.xlsx')
     
     def _aggregate_results(self, df_stat, output_file, workspace) -> Dict:
         """Aggregate results for web display."""

@@ -1,10 +1,10 @@
 @echo off
 REM ============================================================================
-REM AST Lite Web App - Startup Script (Configured for MLABIADH)
+REM AST-NEXT Web App - Startup Script (Configured for MLABIADH)
 REM ============================================================================
 
 echo ========================================
-echo   AST Lite Web Application
+echo   AST-NEXT Web Application
 echo   Starting Server...
 echo ========================================
 echo.

@@ -7,7 +7,7 @@ Also creates the metadata table for tracking dataset load times.
 
 Author: Moez Labiadh, GeoBC
 
-Date: December 2025
+Created: 2025-12-20
 '''
 import os
 import psycopg2
