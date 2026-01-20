@@ -922,7 +922,6 @@ class MapGenerator:
         # Save the map
         try:
             self.map_all.save(out_path)
-            print(f'....All-layers map saved to: {out_path}')
         except Exception as e:
             print(f'....Error saving all-layers map: {e}')
             raise
@@ -930,7 +929,6 @@ class MapGenerator:
         # Inject branding
         try:
             self._inject_branding(out_path, title='Overview Map - All Overlaps')
-            print('....Branding injected successfully')
         except Exception as e:
             print(f'....Warning: Could not inject branding: {e}')
 
