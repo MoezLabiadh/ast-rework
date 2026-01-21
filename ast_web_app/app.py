@@ -41,7 +41,7 @@ app.layout = html.Div([
     dbc.Container([
         dbc.Row([dbc.Col([
             html.H1([html.I(className="fas fa-map-marked-alt me-3"), 
-                "AST-Next - Automatic Status Tool"], className="text-white mb-0"),
+                "AST Next - Automatic Status Tool (Next Gen)"], className="text-white mb-0"),
             html.P("The Open Source Automatic Status Tool!", 
                 className="text-white-50 mb-0")
         ])])
@@ -190,7 +190,7 @@ app.layout = html.Div([
     
     # Footer
     html.Footer([
-        dbc.Container([html.P("AST-Next - GeoBC © 2026", 
+        dbc.Container([html.P("AST Next - GeoBC © 2026", 
             className="text-center text-muted mb-0 py-3")], fluid=True)
     ], className="mt-5 border-top")
 ])
@@ -971,7 +971,7 @@ def generate_html(job_id, res, det, job_data=None):
     <div class="container-fluid py-4">
         <div class="card mb-4">
             <div class="card-header bg-primary text-white">
-                <h2 class="mb-1"><i class="fas fa-map-marked-alt me-2"></i>AST-Next - Full Results Report</h2>
+                <h2 class="mb-1"><i class="fas fa-map-marked-alt me-2"></i>AST Next - Full Results Report</h2>
                 <p class="mb-0">Interactive map and detailed conflicts table</p>
             </div>
             <div class="card-body">
