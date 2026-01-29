@@ -186,9 +186,6 @@ def load_sql_queries() -> Dict[str, str]:
         """,
         
         # Oracle overlay query with two-stage filtering optimization:
-        # Uses SDO_RELATE for direct overlaps (radius=0)
-        # Uses SDO_WITHIN_DISTANCE for buffer/proximity checks (radius>0)
-        
         # Query for radius = 0 (direct overlap only)
         'oracle_overlay_zero_radius': """
             SELECT {cols},
@@ -223,15 +220,7 @@ def load_sql_queries() -> Dict[str, str]:
         """,
         
         # PostGIS queries
-        # PostGIS overlay query optimization (similar to Oracle approach):
-        # Uses ST_Intersects for direct overlaps (radius=0) - faster, no distance calculation
-        # Uses ST_DWithin for buffer/proximity checks (radius>0) - required for distance filtering
-        
         # Query for radius = 0 (direct overlap only)
-        # ST_Intersects is faster than ST_DWithin with distance=0 because:
-        # 1. No distance calculation overhead
-        # 2. Can use spatial index more efficiently
-        # 3. Short-circuits on first intersection found
         'postgis_overlay_zero_radius': """
             SELECT {cols},
                    'INTERSECT' AS result,
@@ -243,8 +232,6 @@ def load_sql_queries() -> Dict[str, str]:
         """,
         
         # Query for radius > 0 (buffer/distance check)
-        # ST_DWithin uses the spatial index efficiently for distance queries
-        # The && operator provides a bounding box pre-filter for additional speed
         'postgis_overlay_with_radius': """
             SELECT {cols},
                    CASE 
