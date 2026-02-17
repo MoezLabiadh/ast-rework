@@ -26,7 +26,7 @@ Arguments:   - Output location (workspace)
 Author: Moez Labiadh - GeoBC
 
 Created: 2025-12-23
-Updated: 2025-01-19
+Updated: 2026-02-17
 """
 
 import warnings
@@ -1073,7 +1073,8 @@ class OverlayAnalyzer:
         gdf_aoi: gpd.GeoDataFrame,
         df_stat: pd.DataFrame,
         workspace: str,
-        create_maps: bool = True
+        create_maps: bool = True,
+        create_datasets: bool = False
     ):
         self.oracle_conn = oracle_conn
         self.postgis_conn = postgis_conn
@@ -1084,7 +1085,15 @@ class OverlayAnalyzer:
         self.results = {}
         self.failed_datasets = []
         self.create_maps = create_maps
-        
+        self.create_datasets = create_datasets
+
+        # Initialize datasets export directory if enabled
+        if self.create_datasets:
+            self.datasets_dir = os.path.join(workspace, 'datasets')
+            os.makedirs(self.datasets_dir, exist_ok=True)
+        else:
+            self.datasets_dir = None
+
         # Initialize the enhanced MapGenerator only if maps are enabled
         if self.create_maps:
             print('\nInitializing Map Generator')
@@ -1170,12 +1179,24 @@ class OverlayAnalyzer:
             # Store results
             self.results[item] = df_all_res
             
-            # Generate map if overlaps found
+            # Convert to GeoDataFrame once; used by both export and map generation
             if ov_nbr > 0:
-                self._generate_map(
-                    df_result, cols, col_lbl, item, 
-                    category, table, is_oracle
-                )
+                try:
+                    gdf_intersect = GeometryProcessor.df_to_gdf(df_result, 3005)
+                except Exception as e:
+                    print(f'.......WARNING: geometry conversion failed for {item}: {e}')
+                    gdf_intersect = None
+
+                if gdf_intersect is not None and not gdf_intersect.empty:
+                    # Export overlaps as GeoPackage (only if enabled)
+                    if self.create_datasets:
+                        self._export_dataset(gdf_intersect, item)
+
+                    # Generate HTML map (handles create_maps check internally)
+                    self._generate_map(
+                        gdf_intersect, cols, col_lbl, item,
+                        category, table, is_oracle
+                    )
         
         except Exception as e:
             print(f'.......ERROR processing dataset {item}: {e}')
@@ -1227,10 +1248,10 @@ class OverlayAnalyzer:
         # radius>0: Use SDO_WITHIN_DISTANCE for buffer/proximity checks
         if radius == 0:
             query_template = self.sql['oracle_overlay_zero_radius']
-            print(f'.....using SDO_RELATE for direct overlap (radius=0)')
+            print(f'.....executing SDO_RELATE query for direct overlap (radius=0)')
         else:
             query_template = self.sql['oracle_overlay_with_radius']
-            print(f'.....using SDO_WITHIN_DISTANCE for buffer check (radius={radius}m)')
+            print(f'.....executing SDO_WITHIN_DISTANCE query for buffer check (radius={radius}m)')
         
         # Build query
         query = query_template.format(
@@ -1313,10 +1334,10 @@ class OverlayAnalyzer:
         # radius>0: Use ST_DWithin for buffer/proximity checks
         if radius == 0:
             query_template = self.sql['postgis_overlay_zero_radius']
-            print(f'.....using ST_Intersects for direct overlap (radius=0)')
+            print(f'.....executing ST_Intersects query for direct overlap (radius=0)')
         else:
             query_template = self.sql['postgis_overlay_with_radius']
-            print(f'.....using ST_DWithin for buffer check (radius={radius}m)')
+            print(f'.....executing ST_DWithin query for buffer check (radius={radius}m)')
         
         # Build query
         query = query_template.format(
@@ -1365,9 +1386,22 @@ class OverlayAnalyzer:
                 pass
             raise Exception(f'PostGIS query error: {str(e)}')
     
+    def _export_dataset(
+        self,
+        gdf_intersect: gpd.GeoDataFrame,
+        item: str
+    ) -> None:
+        """Export overlap results as a layer in the combined GeoPackage."""
+        gpkg_path = os.path.join(self.datasets_dir, 'overlap_results.gpkg')
+        try:
+            print(f'.....Exporting Layer "{item}" to Geopackage')
+            gdf_intersect.to_file(gpkg_path, driver='GPKG', layer=item)
+        except Exception as e:
+            print(f'.....WARNING: Could not export layer {item} to GeoPackage: {e}')
+
     def _generate_map(
         self,
-        df_result: pd.DataFrame,
+        gdf_intersect: gpd.GeoDataFrame,
         cols: str,
         col_lbl: str,
         item: str,
@@ -1380,32 +1414,13 @@ class OverlayAnalyzer:
         if not self.create_maps:
             print('.....map generation disabled - skipping map creation.')
             return
-        
+
         print('.....generating a map.')
-        
-        # Check if DataFrame has geometry before converting
-        if df_result.empty:
-            print('.......WARNING: Cannot create map - no results')
+
+        if gdf_intersect is None or gdf_intersect.empty:
+            print('.......WARNING: Cannot create map - no geometry data')
             return
-        
-        # Check for geometry column
-        has_geom = False
-        if is_oracle and 'SHAPE' in df_result.columns:
-            has_geom = True
-        elif not is_oracle and 'shape' in df_result.columns:
-            has_geom = True
-        
-        if not has_geom:
-            print('.......WARNING: Cannot create map - no geometry column in results')
-            return
-        
-        # Convert to GeoDataFrame
-        try:
-            gdf_intersect = GeometryProcessor.df_to_gdf(df_result, 3005)
-        except Exception as e:
-            print(f'.......WARNING: Cannot create map - geometry conversion failed: {e}')
-            return
-        
+
         # Determine label column
         cols_list = [c.strip() for c in cols.split(',') if c.strip()]
         if is_oracle:

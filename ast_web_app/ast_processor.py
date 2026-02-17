@@ -67,6 +67,7 @@ class ASTProcessor:
         self.failed_datasets = []
         self.gdf_aoi = None  # Store AOI for web display
         self.create_maps = config.get('create_maps', True)  # Get from config, default True
+        self.create_datasets = config.get('create_datasets', False)  # Default False (opt-in)
     
     def _update_progress(self, progress: int, message: str):
         """Update progress if callback is provided."""
@@ -104,6 +105,11 @@ class ASTProcessor:
             # Create maps subdirectory
             maps_dir = workspace / 'maps'
             maps_dir.mkdir(exist_ok=True)
+
+            # Create datasets subdirectory (only when export is enabled)
+            if self.create_datasets:
+                datasets_dir = workspace / 'datasets'
+                datasets_dir.mkdir(exist_ok=True)
             
             # Connect to databases
             self._update_progress(5, "Connecting to Oracle/BCGW...")
@@ -231,7 +237,8 @@ class ASTProcessor:
             gdf_aoi,
             df_stat,
             str(workspace),
-            create_maps=self.create_maps
+            create_maps=self.create_maps,
+            create_datasets=self.create_datasets
         )
         
         item_count = df_stat.shape[0]
@@ -386,7 +393,8 @@ class ASTProcessor:
             'output_file': output_file,
             'workspace': str(workspace),
             'gdf_aoi': self.gdf_aoi,  # AOI geometry for web map
-            'create_maps': self.create_maps  # Include map generation status
+            'create_maps': self.create_maps,  # Include map generation status
+            'create_datasets': self.create_datasets  # Include dataset export status
         }
     
     def _cleanup(self):

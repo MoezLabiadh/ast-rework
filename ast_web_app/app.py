@@ -134,7 +134,18 @@ app.layout = html.Div([
                             value=True,
                             className="mb-2"
                         ),
-                        html.Small("Uncheck to skip map generation and speed up analysis", className="text-muted")
+                        html.Small("Uncheck to skip map generation and speed up analysis", className="text-muted"),
+                        html.Hr(className="my-2"),
+                        dbc.Checkbox(
+                            id="export-datasets",
+                            label="Export Overlap Results",
+                            value=False,
+                            className="mb-2 mt-2"
+                        ),
+                        html.Small(
+                            "Overlaps will be exported as GeoPackage (.gpkg) files in a 'datasets' subfolder of the workspace",
+                            className="text-muted"
+                        )
                     ])
                 ], className="mb-4"),
                 
@@ -594,11 +605,12 @@ def handle_upload(contents, filename, workspace):
      State("bcgw-username", "value"), State("bcgw-password", "value"), State("bcgw-hostname", "value"),
      State("postgis-host", "value"), State("postgis-database", "value"),
      State("postgis-username", "value"), State("postgis-password", "value"),
-     State("generate-maps", "value")],
+     State("generate-maps", "value"),
+     State("export-datasets", "value")],
     prevent_initial_call=True)
 def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id, uploaded_files,
-                   region, workspace, bcgw_user, bcgw_pwd, bcgw_host, 
-                   pg_host, pg_db, pg_user, pg_pwd, generate_maps):
+                   region, workspace, bcgw_user, bcgw_pwd, bcgw_host,
+                   pg_host, pg_db, pg_user, pg_pwd, generate_maps, export_datasets):
     if not n_clicks:
         return None, False, True, True, [
             dbc.Progress(id="progress-bar", value=0, striped=True, animated=True, className="mb-3"),
@@ -631,7 +643,8 @@ def start_analysis(n_clicks, input_source, file_number, disp_id, parcel_id, uplo
         'workspace_xls': r'W:\srm\gss\sandbox\mlabiadh\workspace\20251203_ast_rework\input_spreadsheets',
         'bcgw': {'username': bcgw_user, 'password': bcgw_pwd, 'hostname': bcgw_host},
         'postgis': {'host': pg_host, 'database': pg_db, 'user': pg_user, 'password': pg_pwd},
-        'create_maps': generate_maps if generate_maps is not None else True}
+        'create_maps': generate_maps if generate_maps is not None else True,
+        'create_datasets': export_datasets if export_datasets is not None else False}
     
     if input_source == "TANTALIS":
         config['tantalis'] = {'file_number': file_number, 'disposition_id': int(disp_id), 
