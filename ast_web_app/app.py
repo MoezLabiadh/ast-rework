@@ -114,7 +114,7 @@ app.layout = html.Div([
                             dcc.Upload(id='upload-file', children=html.Div([
                                 html.I(className="fas fa-cloud-upload-alt fa-2x mb-2"), html.Br(),
                                 "Drag and Drop or ", html.A('Select File'), html.Br(),
-                                html.Small('Supported files: Zipped Shapefile or Geodatabases (*.zip), KML, KMZ')
+                                html.Small('Supported files: Zipped Shapefile or Geodatabase (*.zip), KML, KMZ, GeoPackage (*.gpkg), GeoJSON (*.geojson)')
                             ]), style={'width':'100%','height':'140px','borderWidth':'2px',
                                 'borderStyle':'dashed','borderRadius':'10px','textAlign':'center',
                                 'backgroundColor':'#f8f9fa','display':'flex','alignItems':'center',
@@ -430,6 +430,69 @@ def handle_upload(contents, filename, workspace):
                 "workspace": workspace, "upload_id": upload_id, "file_type": "kmz",
                 "file_path": str(kml_files[0]), "layer_name": layers[0]}
         
+        elif ext.endswith('.geojson'):
+            file_path = upload_dir / filename
+            file_path.write_bytes(decoded)
+
+            import geopandas as gpd
+            try:
+                gdf = gpd.read_file(str(file_path))
+                geom_type = gdf.geometry.geom_type.iloc[0] if len(gdf) > 0 else "Unknown"
+
+                if geom_type in ['Polygon', 'MultiPolygon']:
+                    gdf_proj = gdf.to_crs(epsg=3005) if (gdf.crs and gdf.crs.is_geographic) else gdf
+                    area_ha = gdf_proj.geometry.area.sum() / 10000
+                    info_text = f"Type: {geom_type} | Area: {area_ha:.2f} ha"
+                else:
+                    info_text = f"Type: {geom_type}"
+            except Exception as e:
+                info_text = f"(could not read geometry info: {e})"
+
+            return dbc.Alert([
+                html.I(className="fas fa-check-circle me-2"),
+                "GeoJSON file uploaded successfully!", html.Br(),
+                html.Small(info_text, className="text-muted")
+            ], color="success"), {
+                "workspace": workspace, "upload_id": upload_id, "file_type": "geojson",
+                "file_path": str(file_path), "layer_name": None}
+
+        elif ext.endswith('.gpkg'):
+            file_path = upload_dir / filename
+            file_path.write_bytes(decoded)
+
+            import geopandas as gpd
+            try:
+                layers = fiona.listlayers(str(file_path))
+                if len(layers) == 0:
+                    return dbc.Alert("GeoPackage contains no layers.", color="danger"), None
+                if len(layers) > 1:
+                    return dbc.Alert(
+                        f"GeoPackage contains multiple layers ({', '.join(layers)}). "
+                        "Please provide a file with a single layer.",
+                        color="warning"), None
+
+                layer_name = layers[0]
+                gdf = gpd.read_file(str(file_path), layer=layer_name)
+                geom_type = gdf.geometry.geom_type.iloc[0] if len(gdf) > 0 else "Unknown"
+
+                if geom_type in ['Polygon', 'MultiPolygon']:
+                    gdf_proj = gdf.to_crs(epsg=3005) if (gdf.crs and gdf.crs.is_geographic) else gdf
+                    area_ha = gdf_proj.geometry.area.sum() / 10000
+                    info_text = f"Layer: {layer_name} | Type: {geom_type} | Area: {area_ha:.2f} ha"
+                else:
+                    info_text = f"Layer: {layer_name} | Type: {geom_type}"
+            except Exception as e:
+                info_text = f"(could not read geometry info: {e})"
+                layer_name = None
+
+            return dbc.Alert([
+                html.I(className="fas fa-check-circle me-2"),
+                "GeoPackage file uploaded successfully!", html.Br(),
+                html.Small(info_text, className="text-muted")
+            ], color="success"), {
+                "workspace": workspace, "upload_id": upload_id, "file_type": "gpkg",
+                "file_path": str(file_path), "layer_name": layer_name}
+
         elif ext.endswith('.zip'):
             with zipfile.ZipFile(io.BytesIO(decoded)) as z:
                 z.extractall(upload_dir)

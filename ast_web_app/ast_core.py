@@ -329,10 +329,36 @@ class GeometryProcessor:
                 # Always clean up the temporary directory
                 shutil.rmtree(tmp_dir)
         
+        # Handle GeoJSON
+        elif aoi_path_lower.endswith('.geojson'):
+            try:
+                gdf = gpd.read_file(aoi_path)
+                if gdf.crs and gdf.crs.to_epsg() != 3005:
+                    print(f'....Reprojecting GeoJSON from {gdf.crs.to_string()} to EPSG:3005')
+                    gdf = gdf.to_crs(epsg=3005)
+            except Exception as e:
+                raise ValueError(f'Error reading GeoJSON file: {e}')
+
+        # Handle GeoPackage
+        elif aoi_path_lower.endswith('.gpkg'):
+            try:
+                layers = fiona.listlayers(aoi_path)
+                if not layers:
+                    raise ValueError(f'No layers found in GeoPackage: {aoi_path}')
+                layer_name = layers[0]
+                print(f'....Reading GeoPackage layer: {layer_name}')
+                gdf = gpd.read_file(aoi_path, layer=layer_name)
+                if gdf.crs and gdf.crs.to_epsg() != 3005:
+                    print(f'....Reprojecting from {gdf.crs.to_string()} to EPSG:3005')
+                    gdf = gdf.to_crs(epsg=3005)
+            except Exception as e:
+                raise ValueError(f'Error reading GeoPackage file: {e}')
+
         else:
             raise ValueError(
                 'Format not recognized. Please provide a shapefile (.shp), '
-                'feature class (.gdb), KML (.kml), or KMZ (.kmz) file!'
+                'feature class (.gdb), KML (.kml), KMZ (.kmz), '
+                'GeoJSON (.geojson), or GeoPackage (.gpkg) file!'
             )
         
         # Validate that we have geometries
