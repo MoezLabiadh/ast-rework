@@ -1549,18 +1549,23 @@ class OverlayAnalyzer:
         gdf: gpd.GeoDataFrame, def_query: str
     ) -> gpd.GeoDataFrame:
         """
-        Apply a SQL WHERE-style definition query as a pandas filter.
+        Apply an ArcGIS SQL definition query to a GeoDataFrame using sqlite3.
 
-        The def_query from ``DatasetConfig.get_definition_query()`` arrives in
-        the format ``AND (expression)``. This method strips the wrapper and
-        evaluates the expression with ``pandas.DataFrame.query()``.
+        Runs the WHERE clause against the non-geometry columns in an
+        in-memory SQLite database, then filters the original GeoDataFrame
+        by matching row indices — preserving geometry intact.
+
+        Raises on failure so the error propagates to analyze_dataset()
+        and gets logged in failed_datasets.
         """
+        import sqlite3
+
         if not def_query or not def_query.strip():
             return gdf
 
         clean = def_query.strip()
 
-        # Strip 'AND (' prefix and ')' suffix
+        # Strip 'AND (' prefix and ')' suffix added by get_definition_query()
         if clean.upper().startswith('AND (') and clean.endswith(')'):
             clean = clean[5:-1].strip()
         elif clean.upper().startswith('AND '):
@@ -1569,12 +1574,27 @@ class OverlayAnalyzer:
         if not clean:
             return gdf
 
-        try:
-            print(f'.......Applying definition query: {clean}')
-            return gdf.query(clean)
-        except Exception as e:
-            print(f'.......WARNING: Definition query failed ({e}). Skipping filter.')
-            return gdf
+        # Strip double-quotes around column names (ArcGIS convention)
+        clean = clean.replace('"', '')
+
+        print('.......Applying definition query')
+
+        # Add a row-index column, drop geometry, load into SQLite
+        gdf = gdf.copy()
+        gdf['__idx__'] = range(len(gdf))
+
+        geom_col = gdf.geometry.name
+        df_attrs = pd.DataFrame(gdf.drop(columns=geom_col))
+
+        conn = sqlite3.connect(':memory:')
+        df_attrs.to_sql('data', conn, index=False)
+        result = pd.read_sql(f"SELECT __idx__ FROM data WHERE {clean}", conn)
+        conn.close()
+
+        keep_ids = set(result['__idx__'].tolist())
+        filtered = gdf[gdf['__idx__'].isin(keep_ids)].drop(columns='__idx__')
+
+        return filtered
 
     @staticmethod
     def _empty_result(cols: str) -> pd.DataFrame:
