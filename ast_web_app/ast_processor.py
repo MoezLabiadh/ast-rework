@@ -114,9 +114,10 @@ class ASTProcessor:
             # Connect to databases
             self._update_progress(5, "Connecting to Oracle/BCGW...")
             self.oracle_conn = self._connect_oracle()
-            
-            self._update_progress(10, "Connecting to PostGIS...")
-            self.postgis_conn = self._connect_postgis()
+
+            if self.config.get('local_backend', 'geopandas') == 'postgis':
+                self._update_progress(10, "Connecting to PostGIS...")
+                self.postgis_conn = self._connect_postgis()
             
             # Load SQL queries
             self._update_progress(15, "Loading SQL queries...")
@@ -161,8 +162,10 @@ class ASTProcessor:
             bcgw['hostname']
         )
     
-    def _connect_postgis(self) -> PostGISConnection:
-        """Establish PostGIS connection."""
+    def _connect_postgis(self):
+        """Establish PostGIS connection (only when using postgis backend)."""
+        if self.config.get('local_backend', 'geopandas') != 'postgis':
+            return None
         pg = self.config['postgis']
         return PostGISConnection(
             pg['host'],
@@ -238,7 +241,8 @@ class ASTProcessor:
             df_stat,
             str(workspace),
             create_maps=self.create_maps,
-            create_datasets=self.create_datasets
+            create_datasets=self.create_datasets,
+            local_backend=self.config.get('local_backend', 'geopandas')
         )
         
         item_count = df_stat.shape[0]

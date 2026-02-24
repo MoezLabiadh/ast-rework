@@ -1,5 +1,5 @@
 """
-AST_NEXT_pg.py
+AST_NEXT_standalone.py
 (standalone testing script)
 
 AST-NEXT: Automatic Status Tool - Next Generation!
@@ -16,7 +16,7 @@ Notes        The script supports AOIs in TANTALIS Crown Tenure spatial view
              standard AST report and Interactive HTML maps showing the AOI
              and overlapping features.
 
-             This version of the script uses PostGIS to process local datasets.
+             This version supports GeoPandas (default) or PostGIS for local datasets.
 
 Arguments:   - Output location (workspace)
              - DB credentials for Oracle/BCGW and PostGIS
@@ -30,7 +30,7 @@ Arguments:   - Output location (workspace)
 Author: Moez Labiadh - GeoBC
 
 Created: 2025-12-23
-Updated: 2026-02-17
+Updated: 2026-02-24
 """
 
 import warnings
@@ -46,7 +46,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'ast_web_app'))
 
 from ast_core import (
     OracleConnection,
-    PostGISConnection,
     read_query,
     load_sql_queries,
     GeometryProcessor,
@@ -76,6 +75,7 @@ def main():
 
     create_maps = True      # Change to False to disable maps
     create_datasets = False  # Change to True to export overlap results as GeoPackage
+    local_backend = 'geopandas'  # Options: 'geopandas' or 'postgis'
 
     # TANTALIS parameters (if input_src == 'TANTALIS')
     file_nbr = '8016020'
@@ -93,12 +93,15 @@ def main():
         bcgw_pwd = os.getenv('bcgw_pwd')
         oracle_conn = OracleConnection(bcgw_user, bcgw_pwd, hostname)
 
-        print('\nConnecting to PostGIS.')
-        pg_host = 'localhost'
-        pg_database = 'ast_local_datasets'
-        pg_user = 'postgres'
-        pg_pwd = os.getenv('PG_LCL_SUSR_PASS')
-        postgis_conn = PostGISConnection(pg_host, pg_database, pg_user, pg_pwd)
+        # Connect to PostGIS only when using postgis backend
+        if local_backend == 'postgis':
+            from ast_core import PostGISConnection
+            print('\nConnecting to PostGIS.')
+            pg_host = 'localhost'
+            pg_database = 'ast_local_datasets'
+            pg_user = 'postgres'
+            pg_pwd = os.getenv('PG_LCL_SUSR_PASS')
+            postgis_conn = PostGISConnection(pg_host, pg_database, pg_user, pg_pwd)
 
         # Load SQL queries
         print('\nLoading SQL queries')
@@ -160,7 +163,8 @@ def main():
             df_stat=df_stat,
             workspace=out_wksp,
             create_maps=create_maps,
-            create_datasets=create_datasets
+            create_datasets=create_datasets,
+            local_backend=local_backend
         )
 
         item_count = df_stat.shape[0]

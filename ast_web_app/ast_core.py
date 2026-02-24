@@ -26,7 +26,7 @@ Arguments:   - Output location (workspace)
 Author: Moez Labiadh - GeoBC
 
 Created: 2025-12-23
-Updated: 2026-02-17
+Updated: 2026-02-24
 """
 
 import warnings
@@ -39,7 +39,11 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Union
 
 import oracledb
-import psycopg2
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None  # PostGIS backend not available
+import pyogrio
 import pandas as pd
 import geopandas as gpd
 from shapely import from_wkt, wkb
@@ -1068,13 +1072,14 @@ class OverlayAnalyzer:
     def __init__(
         self,
         oracle_conn: OracleConnection,
-        postgis_conn: PostGISConnection,
+        postgis_conn: Optional['PostGISConnection'],
         sql_queries: Dict[str, str],
         gdf_aoi: gpd.GeoDataFrame,
         df_stat: pd.DataFrame,
         workspace: str,
         create_maps: bool = True,
-        create_datasets: bool = False
+        create_datasets: bool = False,
+        local_backend: str = 'geopandas'
     ):
         self.oracle_conn = oracle_conn
         self.postgis_conn = postgis_conn
@@ -1086,6 +1091,7 @@ class OverlayAnalyzer:
         self.failed_datasets = []
         self.create_maps = create_maps
         self.create_datasets = create_datasets
+        self.local_backend = local_backend
 
         # Initialize datasets export directory if enabled
         if self.create_datasets:
@@ -1143,17 +1149,21 @@ class OverlayAnalyzer:
             print('.....getting buffer distance (if any)')
             radius = DatasetConfig.get_buffer_distance(item_index, self.df_stat)
             
-            # Determine if Oracle or PostGIS
+            # Determine if Oracle or local dataset
             is_oracle = table.startswith('WHSE') or table.startswith('REG')
-            
+
             print('.....running Overlay Analysis.')
-            
+
             if is_oracle:
                 df_result = self._analyze_oracle_dataset(
                     table, cols, col_lbl, def_query, radius, wkb_aoi, srid
                 )
-            else:
+            elif self.local_backend == 'postgis':
                 df_result = self._analyze_postgis_dataset(
+                    table, cols, col_lbl, def_query, radius, wkb_aoi, srid, region
+                )
+            else:
+                df_result = self._analyze_geopandas_dataset(
                     table, cols, col_lbl, def_query, radius, wkb_aoi, srid, region
                 )
             
@@ -1385,7 +1395,231 @@ class OverlayAnalyzer:
             except:
                 pass
             raise Exception(f'PostGIS query error: {str(e)}')
-    
+
+    def _analyze_geopandas_dataset(
+        self,
+        table: str,
+        cols: str,
+        col_lbl: str,
+        def_query: str,
+        radius: int,
+        wkb_aoi: bytes,
+        srid: int,
+        region: str
+    ) -> pd.DataFrame:
+        """
+        Analyze local dataset using GeoPandas bbox + sjoin.
+
+        Uses GDAL-level bbox filtering via gpd.read_file(bbox=...) followed
+        by gpd.sjoin() for exact spatial intersection. Handles CRS mismatches
+        by reprojecting the AOI to the dataset CRS for the bbox filter, then
+        reprojecting results back to EPSG:3005.
+        """
+        # Resolve datasource path and optional layer name
+        datasource, layer = self._resolve_local_datasource(table)
+        print('.......Using GeoPandas backend')
+
+        # Peek at dataset CRS without reading features
+        dataset_crs = self._peek_dataset_crs(datasource, layer)
+
+        # Prepare AOI in the dataset's CRS for spatial filtering
+        aoi_crs = self.gdf_aoi.crs
+        if aoi_crs is not None and dataset_crs is not None and aoi_crs != dataset_crs:
+            print(f'.......Reprojecting AOI from {aoi_crs} to {dataset_crs}')
+            aoi_for_query = self.gdf_aoi.to_crs(dataset_crs)
+        else:
+            aoi_for_query = self.gdf_aoi
+
+        aoi_geom = aoi_for_query.geometry.unary_union
+
+        # Read dataset with bbox filter and perform spatial join
+        if radius > 0:
+            # Expand bbox by radius for file read (coarse filter)
+            bounds = aoi_for_query.total_bounds
+            aoi_bbox = (
+                bounds[0] - radius, bounds[1] - radius,
+                bounds[2] + radius, bounds[3] + radius
+            )
+            print(f'.......Reading features within bbox expanded by {radius}m buffer')
+            read_kwargs = {'bbox': aoi_bbox}
+            if layer:
+                read_kwargs['layer'] = layer
+            dataset_gdf = gpd.read_file(datasource, **read_kwargs)
+
+            if dataset_gdf.empty:
+                return self._empty_result(cols)
+
+            # Apply definition query filter
+            dataset_gdf = self._apply_definition_query(dataset_gdf, def_query)
+            if dataset_gdf.empty:
+                return self._empty_result(cols)
+
+            # sjoin with BUFFERED AOI geometry (exact distance filter)
+            aoi_buffered = aoi_for_query.copy()
+            aoi_buffered['geometry'] = aoi_geom.buffer(radius)
+            result_gdf = gpd.sjoin(
+                dataset_gdf, aoi_buffered, how='inner', predicate='intersects'
+            )
+
+            if result_gdf.empty:
+                return self._empty_result(cols)
+
+            # Classify: direct intersect vs within buffer distance
+            result_gdf['RESULT'] = result_gdf.geometry.apply(
+                lambda g: 'INTERSECT' if g.intersects(aoi_geom) else f'Within {radius} m'
+            )
+        else:
+            # No buffer — direct intersection
+            aoi_bbox = tuple(aoi_for_query.total_bounds)
+            print('.......Reading features within AOI bounding box')
+            read_kwargs = {'bbox': aoi_bbox}
+            if layer:
+                read_kwargs['layer'] = layer
+            dataset_gdf = gpd.read_file(datasource, **read_kwargs)
+
+            if dataset_gdf.empty:
+                return self._empty_result(cols)
+
+            # Apply definition query filter
+            dataset_gdf = self._apply_definition_query(dataset_gdf, def_query)
+            if dataset_gdf.empty:
+                return self._empty_result(cols)
+
+            result_gdf = gpd.sjoin(
+                dataset_gdf, aoi_for_query, how='inner', predicate='intersects'
+            )
+
+            if result_gdf.empty:
+                return self._empty_result(cols)
+
+            result_gdf['RESULT'] = 'INTERSECT'
+
+        # Reproject results back to EPSG:3005 if needed
+        if aoi_crs is not None and dataset_crs is not None and aoi_crs != dataset_crs:
+            print(f'.......Reprojecting results back to {aoi_crs}')
+            result_gdf = result_gdf.to_crs(aoi_crs)
+
+        # Build output DataFrame matching expected format
+        return self._format_geopandas_result(result_gdf, cols)
+
+    @staticmethod
+    def _resolve_local_datasource(table: str) -> Tuple[str, Optional[str]]:
+        """
+        Parse a datasource string into file path and optional layer name.
+
+        Handles formats like:
+        - ``path/to/file.shp``
+        - ``path/to/geodatabase.gdb/layer_name``
+        - ``path/to/file.gpkg``
+        """
+        table = table.strip()
+
+        # Check for .gdb with layer name
+        gdb_idx = table.lower().find('.gdb')
+        if gdb_idx != -1:
+            gdb_path = table[:gdb_idx + 4]
+            remainder = table[gdb_idx + 4:].strip('\\/')
+            layer = remainder if remainder else None
+            return gdb_path, layer
+
+        return table, None
+
+    @staticmethod
+    def _peek_dataset_crs(datasource: str, layer: Optional[str] = None):
+        """Read dataset CRS without loading features."""
+        try:
+            kwargs = {}
+            if layer:
+                kwargs['layer'] = layer
+            meta = pyogrio.read_info(datasource, **kwargs)
+            crs = meta.get('crs')
+            if crs is None:
+                print('.......WARNING: Dataset has no CRS defined. Assuming EPSG:3005')
+                from pyproj import CRS
+                return CRS.from_epsg(3005)
+            from pyproj import CRS
+            return CRS.from_user_input(crs)
+        except Exception as e:
+            print(f'.......WARNING: Could not read CRS: {e}. Assuming EPSG:3005')
+            from pyproj import CRS
+            return CRS.from_epsg(3005)
+
+    @staticmethod
+    def _apply_definition_query(
+        gdf: gpd.GeoDataFrame, def_query: str
+    ) -> gpd.GeoDataFrame:
+        """
+        Apply a SQL WHERE-style definition query as a pandas filter.
+
+        The def_query from ``DatasetConfig.get_definition_query()`` arrives in
+        the format ``AND (expression)``. This method strips the wrapper and
+        evaluates the expression with ``pandas.DataFrame.query()``.
+        """
+        if not def_query or not def_query.strip():
+            return gdf
+
+        clean = def_query.strip()
+
+        # Strip 'AND (' prefix and ')' suffix
+        if clean.upper().startswith('AND (') and clean.endswith(')'):
+            clean = clean[5:-1].strip()
+        elif clean.upper().startswith('AND '):
+            clean = clean[4:].strip()
+
+        if not clean:
+            return gdf
+
+        try:
+            print(f'.......Applying definition query: {clean}')
+            return gdf.query(clean)
+        except Exception as e:
+            print(f'.......WARNING: Definition query failed ({e}). Skipping filter.')
+            return gdf
+
+    @staticmethod
+    def _empty_result(cols: str) -> pd.DataFrame:
+        """Return an empty DataFrame with the expected columns."""
+        col_list = [c.strip() for c in cols.split(',') if c.strip()]
+        col_list.extend(['RESULT', 'SHAPE'])
+        return pd.DataFrame(columns=col_list)
+
+    @staticmethod
+    def _format_geopandas_result(
+        result_gdf: gpd.GeoDataFrame, cols: str
+    ) -> pd.DataFrame:
+        """
+        Convert sjoin result GeoDataFrame to the DataFrame format expected
+        by the rest of the pipeline (columns + RESULT + SHAPE as WKT).
+        """
+        # Drop sjoin index columns
+        drop_cols = [c for c in result_gdf.columns if c.startswith('index_')]
+        if drop_cols:
+            result_gdf = result_gdf.drop(columns=drop_cols)
+
+        # Add SHAPE column as WKT
+        result_gdf['SHAPE'] = result_gdf.geometry.apply(lambda g: g.wkt)
+
+        # Select requested columns + RESULT + SHAPE
+        requested = [c.strip() for c in cols.split(',') if c.strip()]
+
+        # Match columns case-insensitively
+        col_map = {c.lower(): c for c in result_gdf.columns}
+        output_cols = []
+        for rc in requested:
+            matched = col_map.get(rc.lower())
+            if matched:
+                output_cols.append(matched)
+
+        # Always include RESULT and SHAPE
+        for extra in ['RESULT', 'SHAPE']:
+            if extra not in output_cols:
+                output_cols.append(extra)
+
+        # Filter to available columns only
+        output_cols = [c for c in output_cols if c in result_gdf.columns]
+
+        return pd.DataFrame(result_gdf[output_cols].values, columns=output_cols)
+
     def _export_dataset(
         self,
         gdf_intersect: gpd.GeoDataFrame,
