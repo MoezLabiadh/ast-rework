@@ -1079,7 +1079,7 @@ class OverlayAnalyzer:
         workspace: str,
         create_maps: bool = True,
         create_datasets: bool = False,
-        local_backend: str = 'geopandas'
+        local_backend: str = 'postgis'
     ):
         self.oracle_conn = oracle_conn
         self.postgis_conn = postgis_conn
